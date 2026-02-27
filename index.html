@@ -581,6 +581,119 @@
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 
+  /* ─── SYNC MODAL ─── */
+  .sync-modal {
+    max-width: 640px;
+  }
+  .sync-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    gap: 0;
+  }
+  .sync-tab {
+    padding: 10px 18px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .sync-tab:hover { color: var(--text); }
+  .sync-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .sync-panel { display: none; }
+  .sync-panel.active { display: block; }
+  .sync-textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    resize: vertical;
+    min-height: 200px;
+    transition: border-color 0.15s;
+    line-height: 1.5;
+  }
+  .sync-textarea:focus { border-color: var(--accent); }
+  .sync-textarea::placeholder { color: var(--text-dim); font-family: inherit; }
+  .sync-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }
+  .sync-hint code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--surface-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--accent-hover);
+  }
+  .sync-format-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .sync-format-btn {
+    padding: 5px 14px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .sync-format-btn:hover { border-color: var(--border-light); color: var(--text); }
+  .sync-format-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sync-output-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .sync-status {
+    font-size: 12px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    margin-top: 10px;
+    display: none;
+  }
+  .sync-status.success { background: var(--completed-bg); color: var(--completed); border: 1px solid var(--completed-border); display: block; }
+  .sync-status.error { background: var(--overdue-bg); color: var(--overdue); border: 1px solid var(--overdue-border); display: block; }
+  .sync-status.info { background: var(--inprogress-bg); color: var(--inprogress); border: 1px solid var(--inprogress-border); display: block; }
+  .import-mode-group {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .import-mode-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+  }
+  .import-mode-btn:hover { border-color: var(--border-light); color: var(--text); }
+  .import-mode-btn.active { background: var(--surface-elevated); border-color: var(--accent); color: var(--text); }
+
   /* tooltip for gantt bars */
   .gantt-tooltip {
     position: fixed;
@@ -628,13 +741,13 @@
     TaskFlow
   </div>
   <div class="header-actions">
-    <button class="btn" onclick="exportCSV()" title="Exportar CSV">
+    <button class="btn" onclick="openSyncModal('export')" title="Exportar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      <span>Exportar CSV</span>
+      <span>Exportar</span>
     </button>
-    <button class="btn" onclick="document.getElementById('csvInput').click()" title="Importar CSV">
+    <button class="btn" onclick="openSyncModal('import')" title="Importar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <span>Importar CSV</span>
+      <span>Importar</span>
     </button>
     <input type="file" id="csvInput" accept=".csv" onchange="importCSV(event)">
     <button class="btn btn-primary" onclick="openModal()">
@@ -716,6 +829,80 @@
     </div>
     <div class="gantt-container">
       <div class="gantt-wrapper" id="ganttContent"></div>
+    </div>
+  </div>
+</div>
+
+<!-- SYNC MODAL -->
+<div class="modal-overlay" id="syncModal">
+  <div class="modal sync-modal">
+    <div class="modal-header">
+      <h2 id="syncModalTitle">Sincronizar Tarefas</h2>
+      <button class="modal-close" onclick="closeSyncModal()">✕</button>
+    </div>
+    <!-- tabs -->
+    <div class="sync-tabs">
+      <button class="sync-tab active" id="syncTabExport" onclick="switchSyncTab('export')">
+        📤 Exportar
+      </button>
+      <button class="sync-tab" id="syncTabImport" onclick="switchSyncTab('import')">
+        📥 Importar / Mesclar
+      </button>
+    </div>
+    <div class="modal-body">
+
+      <!-- EXPORT PANEL -->
+      <div class="sync-panel active" id="syncPanelExport">
+        <p class="sync-hint">Escolha o formato e copie o texto gerado para colar em outro dispositivo.</p>
+        <div class="sync-format-tabs">
+          <button class="sync-format-btn active" id="exportFmtCSV" onclick="setSyncExportFmt('csv')">CSV</button>
+          <button class="sync-format-btn" id="exportFmtJSON" onclick="setSyncExportFmt('json')">JSON</button>
+        </div>
+        <textarea class="sync-textarea" id="syncExportText" readonly placeholder="Clique em Gerar para produzir o texto..."></textarea>
+        <div class="sync-output-actions">
+          <button class="btn btn-primary" onclick="generateSyncExport()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+            Gerar
+          </button>
+          <button class="btn" onclick="copySyncExport()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            Copiar
+          </button>
+          <button class="btn" onclick="downloadSyncExport()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Baixar arquivo
+          </button>
+        </div>
+        <div class="sync-status" id="syncExportStatus"></div>
+      </div>
+
+      <!-- IMPORT PANEL -->
+      <div class="sync-panel" id="syncPanelImport">
+        <div class="sync-format-tabs">
+          <button class="sync-format-btn active" id="importFmtCSV" onclick="setSyncImportFmt('csv')">CSV</button>
+          <button class="sync-format-btn" id="importFmtJSON" onclick="setSyncImportFmt('json')">JSON</button>
+          <button class="sync-format-btn" id="importFmtFile" onclick="triggerFileImport()">📁 Arquivo</button>
+        </div>
+        <p class="sync-hint" id="syncImportHint">Cole o texto CSV aqui. Colunas esperadas: <code>title</code>, <code>description</code>, <code>status</code>, <code>startDate</code>, <code>endDate</code>.</p>
+        <textarea class="sync-textarea" id="syncImportText" placeholder="Cole o CSV aqui..."></textarea>
+        <p class="sync-hint" style="margin-top:10px">Modo de mesclagem:</p>
+        <div class="import-mode-group">
+          <button class="import-mode-btn active" id="importModeMerge" onclick="setImportMode('merge')">
+            🔀 Mesclar<br><small style="font-weight:400;opacity:0.7">Adiciona novas, ignora duplicatas por título</small>
+          </button>
+          <button class="import-mode-btn" id="importModeReplace" onclick="setImportMode('replace')">
+            🔄 Substituir<br><small style="font-weight:400;opacity:0.7">Substitui todas as tarefas existentes</small>
+          </button>
+        </div>
+        <div class="sync-status" id="syncImportStatus"></div>
+      </div>
+
+    </div>
+    <div class="modal-footer" id="syncModalFooter">
+      <button class="btn" onclick="closeSyncModal()">Fechar</button>
+      <button class="btn btn-primary" id="syncImportBtn" onclick="executeSyncImport()" style="display:none">
+        📥 Importar Tarefas
+      </button>
     </div>
   </div>
 </div>
@@ -1497,9 +1684,201 @@ function parseCSVLines(text) {
   return lines;
 }
 
+// ─── SYNC MODAL STATE ───
+let syncExportFmt = 'csv';
+let syncImportFmt = 'csv';
+let syncImportMode = 'merge';
+
+function openSyncModal(tab) {
+  document.getElementById('syncModal').classList.add('show');
+  switchSyncTab(tab || 'export');
+  if (tab === 'export') generateSyncExport();
+}
+
+function closeSyncModal() {
+  document.getElementById('syncModal').classList.remove('show');
+  document.getElementById('syncExportText').value = '';
+  document.getElementById('syncImportText').value = '';
+  hideSyncStatus('syncExportStatus');
+  hideSyncStatus('syncImportStatus');
+}
+
+function switchSyncTab(tab) {
+  ['export','import'].forEach(t => {
+    document.getElementById('syncTab' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+    document.getElementById('syncPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+  });
+  document.getElementById('syncImportBtn').style.display = (tab === 'import') ? '' : 'none';
+}
+
+function setSyncExportFmt(fmt) {
+  syncExportFmt = fmt;
+  document.getElementById('exportFmtCSV').classList.toggle('active', fmt === 'csv');
+  document.getElementById('exportFmtJSON').classList.toggle('active', fmt === 'json');
+  document.getElementById('syncExportText').value = '';
+  hideSyncStatus('syncExportStatus');
+}
+
+function setSyncImportFmt(fmt) {
+  syncImportFmt = fmt;
+  document.getElementById('importFmtCSV').classList.toggle('active', fmt === 'csv');
+  document.getElementById('importFmtJSON').classList.toggle('active', fmt === 'json');
+  document.getElementById('importFmtFile').classList.remove('active');
+  const hints = {
+    csv: 'Cole o texto CSV aqui. Colunas esperadas: <code>title</code>, <code>description</code>, <code>status</code>, <code>startDate</code>, <code>endDate</code>.',
+    json: 'Cole o texto JSON aqui. Formato: array de objetos com campos <code>title</code>, <code>description</code>, <code>status</code>, <code>startDate</code>, <code>endDate</code>.'
+  };
+  document.getElementById('syncImportHint').innerHTML = hints[fmt];
+  document.getElementById('syncImportText').placeholder = `Cole o ${fmt.toUpperCase()} aqui...`;
+  hideSyncStatus('syncImportStatus');
+}
+
+function setImportMode(mode) {
+  syncImportMode = mode;
+  document.getElementById('importModeMerge').classList.toggle('active', mode === 'merge');
+  document.getElementById('importModeReplace').classList.toggle('active', mode === 'replace');
+}
+
+function triggerFileImport() {
+  document.getElementById('importFmtFile').classList.add('active');
+  document.getElementById('importFmtCSV').classList.remove('active');
+  document.getElementById('importFmtJSON').classList.remove('active');
+  document.getElementById('csvInput').click();
+}
+
+function showSyncStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'sync-status ' + type;
+}
+
+function hideSyncStatus(id) {
+  document.getElementById(id).className = 'sync-status';
+}
+
+function generateSyncExport() {
+  let text = '';
+  if (syncExportFmt === 'csv') {
+    const headers = ['id','title','description','status','startDate','endDate'];
+    const rows = tasks.map(t => headers.map(h => `"${(t[h]||'').replace(/"/g,'""')}"`).join(','));
+    text = [headers.join(','), ...rows].join('\n');
+  } else {
+    text = JSON.stringify(tasks, null, 2);
+  }
+  document.getElementById('syncExportText').value = text;
+  showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) no formato ${syncExportFmt.toUpperCase()}.`, 'info');
+}
+
+function copySyncExport() {
+  const ta = document.getElementById('syncExportText');
+  if (!ta.value) { generateSyncExport(); }
+  navigator.clipboard.writeText(ta.value).then(() => {
+    showSyncStatus('syncExportStatus', '✓ Texto copiado para a área de transferência!', 'success');
+  }).catch(() => {
+    ta.select();
+    document.execCommand('copy');
+    showSyncStatus('syncExportStatus', '✓ Texto copiado!', 'success');
+  });
+}
+
+function downloadSyncExport() {
+  if (!document.getElementById('syncExportText').value) generateSyncExport();
+  const text = document.getElementById('syncExportText').value;
+  const ext = syncExportFmt;
+  const mime = ext === 'json' ? 'application/json' : 'text/csv';
+  const blob = new Blob([ext === 'csv' ? '\ufeff' + text : text], { type: mime + ';charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `taskflow_${new Date().toISOString().split('T')[0]}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showSyncStatus('syncExportStatus', `✓ Arquivo ${ext.toUpperCase()} baixado!`, 'success');
+}
+
+function executeSyncImport() {
+  const text = document.getElementById('syncImportText').value.trim();
+  if (!text) {
+    showSyncStatus('syncImportStatus', 'Cole o texto antes de importar.', 'error');
+    return;
+  }
+  try {
+    let imported = 0;
+    let newTasks = [];
+
+    if (syncImportFmt === 'json') {
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array de tarefas.');
+      const validStatuses = ['Completed', 'In Progress', 'To Do', 'Overdue'];
+      newTasks = parsed.map(t => ({
+        id: genId(),
+        title: String(t.title || '').trim(),
+        description: String(t.description || '').trim(),
+        status: validStatuses.includes(t.status) ? t.status : 'To Do',
+        startDate: t.startDate || new Date().toISOString().split('T')[0],
+        endDate: t.endDate || new Date().toISOString().split('T')[0],
+      })).filter(t => t.title);
+    } else {
+      // CSV
+      const lines = parseCSVLines(text);
+      if (lines.length < 2) throw new Error('CSV vazio ou sem dados.');
+      const headers = lines[0].map(h => h.trim().toLowerCase());
+      const titleIdx = headers.indexOf('title');
+      const descIdx = headers.indexOf('description');
+      const statusIdx = headers.indexOf('status');
+      const startIdx = headers.indexOf('startdate');
+      const endIdx = headers.indexOf('enddate');
+      if (titleIdx === -1 || statusIdx === -1 || startIdx === -1 || endIdx === -1) {
+        throw new Error('CSV deve conter: title, description, status, startDate, endDate');
+      }
+      const validStatuses = ['Completed', 'In Progress', 'To Do', 'Overdue'];
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i];
+        const title = cols[titleIdx]?.trim();
+        if (!title) continue;
+        let status = cols[statusIdx]?.trim();
+        if (!validStatuses.includes(status)) status = 'To Do';
+        newTasks.push({
+          id: genId(),
+          title,
+          description: descIdx >= 0 ? (cols[descIdx]?.trim() || '') : '',
+          status,
+          startDate: cols[startIdx]?.trim() || new Date().toISOString().split('T')[0],
+          endDate: cols[endIdx]?.trim() || new Date().toISOString().split('T')[0],
+        });
+      }
+    }
+
+    if (newTasks.length === 0) throw new Error('Nenhuma tarefa válida encontrada.');
+
+    if (syncImportMode === 'replace') {
+      tasks = newTasks;
+      imported = newTasks.length;
+    } else {
+      // merge: skip tasks with same title (case-insensitive)
+      const existingTitles = new Set(tasks.map(t => t.title.toLowerCase()));
+      const toAdd = newTasks.filter(t => !existingTitles.has(t.title.toLowerCase()));
+      tasks.push(...toAdd);
+      imported = toAdd.length;
+      const skipped = newTasks.length - imported;
+      saveToStorage(); render();
+      showSyncStatus('syncImportStatus',
+        `✓ ${imported} tarefa(s) adicionada(s).${skipped ? ` ${skipped} ignorada(s) por título duplicado.` : ''}`,
+        'success');
+      return;
+    }
+
+    saveToStorage();
+    render();
+    showSyncStatus('syncImportStatus', `✓ ${imported} tarefa(s) importada(s) com sucesso!`, 'success');
+  } catch (err) {
+    showSyncStatus('syncImportStatus', '✗ Erro: ' + err.message, 'error');
+  }
+}
+
 // ─── KEYBOARD ───
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape') { closeModal(); closeSyncModal(); }
   if (e.key === 'Enter' && document.getElementById('taskModal').classList.contains('show')) {
     if (document.activeElement.tagName !== 'TEXTAREA') saveTask();
   }
