@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TaskFlow — Gestão de Tarefas</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='10' y='10' width='80' height='80' rx='12' fill='%234A90D9'/><path d='M30 52l12 12 28-28' stroke='white' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -639,25 +638,7 @@
     font-size: 11px;
     color: var(--accent-hover);
   }
-  .sync-format-tabs {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 12px;
-  }
-  .sync-format-btn {
-    padding: 5px 14px;
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    background: transparent;
-    color: var(--text-muted);
-    font-family: inherit;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .sync-format-btn:hover { border-color: var(--border-light); color: var(--text); }
-  .sync-format-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
   .sync-output-actions {
     display: flex;
     gap: 8px;
@@ -750,7 +731,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       <span>Importar</span>
     </button>
-    <input type="file" id="csvInput" accept=".csv" onchange="importCSV(event)">
+    <input type="file" id="csvInput" accept=".json" onchange="importFileJSON(event)">
     <button class="btn btn-primary" onclick="openModal()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       <span>Nova Tarefa</span>
@@ -854,12 +835,8 @@
 
       <!-- EXPORT PANEL -->
       <div class="sync-panel active" id="syncPanelExport">
-        <p class="sync-hint">Escolha o formato e copie o texto gerado para colar em outro dispositivo.</p>
-        <div class="sync-format-tabs">
-          <button class="sync-format-btn active" id="exportFmtCSV" onclick="setSyncExportFmt('csv')">CSV</button>
-          <button class="sync-format-btn" id="exportFmtJSON" onclick="setSyncExportFmt('json')">JSON</button>
-        </div>
-        <textarea class="sync-textarea" id="syncExportText" readonly placeholder="Clique em Gerar para produzir o texto..."></textarea>
+        <p class="sync-hint">Copie o texto JSON gerado para colar em outro dispositivo, ou baixe como arquivo.</p>
+        <textarea class="sync-textarea" id="syncExportText" readonly placeholder="Clique em Gerar para produzir o JSON..."></textarea>
         <div class="sync-output-actions">
           <button class="btn btn-primary" onclick="generateSyncExport()">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
@@ -871,7 +848,7 @@
           </button>
           <button class="btn" onclick="downloadSyncExport()">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Baixar arquivo
+            Baixar .json
           </button>
         </div>
         <div class="sync-status" id="syncExportStatus"></div>
@@ -879,20 +856,21 @@
 
       <!-- IMPORT PANEL -->
       <div class="sync-panel" id="syncPanelImport">
-        <div class="sync-format-tabs">
-          <button class="sync-format-btn active" id="importFmtCSV" onclick="setSyncImportFmt('csv')">CSV</button>
-          <button class="sync-format-btn" id="importFmtJSON" onclick="setSyncImportFmt('json')">JSON</button>
-          <button class="sync-format-btn" id="importFmtFile" onclick="triggerFileImport()">📁 Arquivo</button>
+        <p class="sync-hint" id="syncImportHint">Cole o JSON aqui (gerado pelo botão Exportar em outro dispositivo) ou carregue um arquivo <code>.json</code>.</p>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <button class="btn" style="font-size:12px;padding:6px 14px" onclick="triggerFileImport()">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Carregar arquivo .json
+          </button>
         </div>
-        <p class="sync-hint" id="syncImportHint">Cole o texto CSV aqui. Colunas esperadas: <code>title</code>, <code>description</code>, <code>status</code>, <code>startDate</code>, <code>endDate</code>.</p>
-        <textarea class="sync-textarea" id="syncImportText" placeholder="Cole o CSV aqui..."></textarea>
+        <textarea class="sync-textarea" id="syncImportText" placeholder="Cole o JSON aqui..."></textarea>
         <p class="sync-hint" style="margin-top:10px">Modo de mesclagem:</p>
         <div class="import-mode-group">
           <button class="import-mode-btn active" id="importModeMerge" onclick="setImportMode('merge')">
-            🔀 Mesclar<br><small style="font-weight:400;opacity:0.7">Adiciona novas, ignora duplicatas por título</small>
+            🔀 Mesclar<br><small style="font-weight:400;opacity:0.7">Adiciona novas; sobrescreve existentes se houver mudança de datas ou status</small>
           </button>
           <button class="import-mode-btn" id="importModeReplace" onclick="setImportMode('replace')">
-            🔄 Substituir<br><small style="font-weight:400;opacity:0.7">Substitui todas as tarefas existentes</small>
+            🔄 Substituir<br><small style="font-weight:400;opacity:0.7">Descarta tudo e importa o conjunto completo</small>
           </button>
         </div>
         <div class="sync-status" id="syncImportStatus"></div>
@@ -1573,121 +1551,7 @@ document.addEventListener('click', () => {
   document.getElementById('statusDropdown').classList.remove('show');
 });
 
-// ─── CSV EXPORT ───
-function exportCSV() {
-  const headers = ['id','title','description','status','startDate','endDate'];
-  const rows = tasks.map(t =>
-    headers.map(h => `"${(t[h]||'').replace(/"/g, '""')}"`).join(',')
-  );
-  const csv = [headers.join(','), ...rows].join('\n');
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `taskflow_${new Date().toISOString().split('T')[0]}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ─── CSV IMPORT ───
-function importCSV(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const text = e.target.result;
-      const lines = parseCSVLines(text);
-      if (lines.length < 2) { alert('CSV vazio ou inválido.'); return; }
-
-      const headers = lines[0].map(h => h.trim().toLowerCase());
-      const titleIdx = headers.indexOf('title');
-      const descIdx = headers.indexOf('description');
-      const statusIdx = headers.indexOf('status');
-      const startIdx = headers.indexOf('startdate');
-      const endIdx = headers.indexOf('enddate');
-
-      if (titleIdx === -1 || statusIdx === -1 || startIdx === -1 || endIdx === -1) {
-        alert('CSV deve conter colunas: title, description, status, startDate, endDate');
-        return;
-      }
-
-      const validStatuses = ['Completed', 'In Progress', 'To Do', 'Overdue'];
-      let imported = 0;
-
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i];
-        if (cols.length < 4) continue;
-        const title = cols[titleIdx]?.trim();
-        if (!title) continue;
-
-        let status = cols[statusIdx]?.trim();
-        if (!validStatuses.includes(status)) status = 'To Do';
-
-        tasks.push({
-          id: genId(),
-          title,
-          description: descIdx >= 0 ? (cols[descIdx]?.trim() || '') : '',
-          status,
-          startDate: cols[startIdx]?.trim() || new Date().toISOString().split('T')[0],
-          endDate: cols[endIdx]?.trim() || new Date().toISOString().split('T')[0],
-        });
-        imported++;
-      }
-
-      saveToStorage();
-      render();
-      alert(`${imported} tarefa(s) importada(s) com sucesso!`);
-    } catch(err) {
-      alert('Erro ao processar CSV: ' + err.message);
-    }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
-}
-
-function parseCSVLines(text) {
-  const lines = [];
-  let current = [];
-  let field = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (i + 1 < text.length && text[i + 1] === '"') {
-          field += '"'; i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true;
-      } else if (ch === ',') {
-        current.push(field); field = '';
-      } else if (ch === '\n' || (ch === '\r' && text[i+1] === '\n')) {
-        current.push(field); field = '';
-        if (current.some(c => c.trim())) lines.push(current);
-        current = [];
-        if (ch === '\r') i++;
-      } else {
-        field += ch;
-      }
-    }
-  }
-  current.push(field);
-  if (current.some(c => c.trim())) lines.push(current);
-  return lines;
-}
-
 // ─── SYNC MODAL STATE ───
-let syncExportFmt = 'csv';
-let syncImportFmt = 'csv';
 let syncImportMode = 'merge';
 
 function openSyncModal(tab) {
@@ -1712,28 +1576,6 @@ function switchSyncTab(tab) {
   document.getElementById('syncImportBtn').style.display = (tab === 'import') ? '' : 'none';
 }
 
-function setSyncExportFmt(fmt) {
-  syncExportFmt = fmt;
-  document.getElementById('exportFmtCSV').classList.toggle('active', fmt === 'csv');
-  document.getElementById('exportFmtJSON').classList.toggle('active', fmt === 'json');
-  document.getElementById('syncExportText').value = '';
-  hideSyncStatus('syncExportStatus');
-}
-
-function setSyncImportFmt(fmt) {
-  syncImportFmt = fmt;
-  document.getElementById('importFmtCSV').classList.toggle('active', fmt === 'csv');
-  document.getElementById('importFmtJSON').classList.toggle('active', fmt === 'json');
-  document.getElementById('importFmtFile').classList.remove('active');
-  const hints = {
-    csv: 'Cole o texto CSV aqui. Colunas esperadas: <code>title</code>, <code>description</code>, <code>status</code>, <code>startDate</code>, <code>endDate</code>.',
-    json: 'Cole o texto JSON aqui. Formato: array de objetos com campos <code>title</code>, <code>description</code>, <code>status</code>, <code>startDate</code>, <code>endDate</code>.'
-  };
-  document.getElementById('syncImportHint').innerHTML = hints[fmt];
-  document.getElementById('syncImportText').placeholder = `Cole o ${fmt.toUpperCase()} aqui...`;
-  hideSyncStatus('syncImportStatus');
-}
-
 function setImportMode(mode) {
   syncImportMode = mode;
   document.getElementById('importModeMerge').classList.toggle('active', mode === 'merge');
@@ -1741,9 +1583,6 @@ function setImportMode(mode) {
 }
 
 function triggerFileImport() {
-  document.getElementById('importFmtFile').classList.add('active');
-  document.getElementById('importFmtCSV').classList.remove('active');
-  document.getElementById('importFmtJSON').classList.remove('active');
   document.getElementById('csvInput').click();
 }
 
@@ -1758,123 +1597,123 @@ function hideSyncStatus(id) {
 }
 
 function generateSyncExport() {
-  let text = '';
-  if (syncExportFmt === 'csv') {
-    const headers = ['id','title','description','status','startDate','endDate'];
-    const rows = tasks.map(t => headers.map(h => `"${(t[h]||'').replace(/"/g,'""')}"`).join(','));
-    text = [headers.join(','), ...rows].join('\n');
-  } else {
-    text = JSON.stringify(tasks, null, 2);
-  }
+  const text = JSON.stringify(tasks, null, 2);
   document.getElementById('syncExportText').value = text;
-  showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) no formato ${syncExportFmt.toUpperCase()}.`, 'info');
+  showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info');
 }
 
 function copySyncExport() {
   const ta = document.getElementById('syncExportText');
-  if (!ta.value) { generateSyncExport(); }
+  if (!ta.value) generateSyncExport();
   navigator.clipboard.writeText(ta.value).then(() => {
-    showSyncStatus('syncExportStatus', '✓ Texto copiado para a área de transferência!', 'success');
+    showSyncStatus('syncExportStatus', '✓ JSON copiado para a área de transferência!', 'success');
   }).catch(() => {
     ta.select();
     document.execCommand('copy');
-    showSyncStatus('syncExportStatus', '✓ Texto copiado!', 'success');
+    showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success');
   });
 }
 
 function downloadSyncExport() {
   if (!document.getElementById('syncExportText').value) generateSyncExport();
   const text = document.getElementById('syncExportText').value;
-  const ext = syncExportFmt;
-  const mime = ext === 'json' ? 'application/json' : 'text/csv';
-  const blob = new Blob([ext === 'csv' ? '\ufeff' + text : text], { type: mime + ';charset=utf-8;' });
+  const blob = new Blob([text], { type: 'application/json;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `taskflow_${new Date().toISOString().split('T')[0]}.${ext}`;
+  a.download = `taskflow_${new Date().toISOString().split('T')[0]}.json`;
   a.click();
   URL.revokeObjectURL(url);
-  showSyncStatus('syncExportStatus', `✓ Arquivo ${ext.toUpperCase()} baixado!`, 'success');
+  showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success');
+}
+
+// Parse and validate raw JSON text into a task list
+function parseImportedJSON(text) {
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array de tarefas.');
+  const validStatuses = ['Completed', 'In Progress', 'To Do', 'Overdue'];
+  return parsed.map(t => ({
+    id: t.id || genId(),
+    title: String(t.title || '').trim(),
+    description: String(t.description || '').trim(),
+    status: validStatuses.includes(t.status) ? t.status : 'To Do',
+    startDate: t.startDate || new Date().toISOString().split('T')[0],
+    endDate: t.endDate || new Date().toISOString().split('T')[0],
+  })).filter(t => t.title);
+}
+
+// Merge: add new tasks; update existing ones if status or dates changed
+function mergeTaskLists(incoming) {
+  let added = 0, updated = 0;
+  const existingByTitle = new Map(tasks.map(t => [t.title.toLowerCase(), t]));
+  for (const inc of incoming) {
+    const key = inc.title.toLowerCase();
+    if (existingByTitle.has(key)) {
+      const ex = existingByTitle.get(key);
+      const changed = ex.status !== inc.status ||
+                      ex.startDate !== inc.startDate ||
+                      ex.endDate !== inc.endDate;
+      if (changed) {
+        ex.status    = inc.status;
+        ex.startDate = inc.startDate;
+        ex.endDate   = inc.endDate;
+        if (!ex.description && inc.description) ex.description = inc.description;
+        updated++;
+      }
+    } else {
+      tasks.push({ ...inc, id: genId() });
+      added++;
+    }
+  }
+  return { added, updated };
 }
 
 function executeSyncImport() {
   const text = document.getElementById('syncImportText').value.trim();
   if (!text) {
-    showSyncStatus('syncImportStatus', 'Cole o texto antes de importar.', 'error');
+    showSyncStatus('syncImportStatus', 'Cole o JSON antes de importar.', 'error');
     return;
   }
   try {
-    let imported = 0;
-    let newTasks = [];
-
-    if (syncImportFmt === 'json') {
-      const parsed = JSON.parse(text);
-      if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array de tarefas.');
-      const validStatuses = ['Completed', 'In Progress', 'To Do', 'Overdue'];
-      newTasks = parsed.map(t => ({
-        id: genId(),
-        title: String(t.title || '').trim(),
-        description: String(t.description || '').trim(),
-        status: validStatuses.includes(t.status) ? t.status : 'To Do',
-        startDate: t.startDate || new Date().toISOString().split('T')[0],
-        endDate: t.endDate || new Date().toISOString().split('T')[0],
-      })).filter(t => t.title);
-    } else {
-      // CSV
-      const lines = parseCSVLines(text);
-      if (lines.length < 2) throw new Error('CSV vazio ou sem dados.');
-      const headers = lines[0].map(h => h.trim().toLowerCase());
-      const titleIdx = headers.indexOf('title');
-      const descIdx = headers.indexOf('description');
-      const statusIdx = headers.indexOf('status');
-      const startIdx = headers.indexOf('startdate');
-      const endIdx = headers.indexOf('enddate');
-      if (titleIdx === -1 || statusIdx === -1 || startIdx === -1 || endIdx === -1) {
-        throw new Error('CSV deve conter: title, description, status, startDate, endDate');
-      }
-      const validStatuses = ['Completed', 'In Progress', 'To Do', 'Overdue'];
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i];
-        const title = cols[titleIdx]?.trim();
-        if (!title) continue;
-        let status = cols[statusIdx]?.trim();
-        if (!validStatuses.includes(status)) status = 'To Do';
-        newTasks.push({
-          id: genId(),
-          title,
-          description: descIdx >= 0 ? (cols[descIdx]?.trim() || '') : '',
-          status,
-          startDate: cols[startIdx]?.trim() || new Date().toISOString().split('T')[0],
-          endDate: cols[endIdx]?.trim() || new Date().toISOString().split('T')[0],
-        });
-      }
-    }
-
-    if (newTasks.length === 0) throw new Error('Nenhuma tarefa válida encontrada.');
+    const incoming = parseImportedJSON(text);
+    if (incoming.length === 0) throw new Error('Nenhuma tarefa válida encontrada no JSON.');
 
     if (syncImportMode === 'replace') {
-      tasks = newTasks;
-      imported = newTasks.length;
-    } else {
-      // merge: skip tasks with same title (case-insensitive)
-      const existingTitles = new Set(tasks.map(t => t.title.toLowerCase()));
-      const toAdd = newTasks.filter(t => !existingTitles.has(t.title.toLowerCase()));
-      tasks.push(...toAdd);
-      imported = toAdd.length;
-      const skipped = newTasks.length - imported;
+      tasks = incoming.map(t => ({ ...t, id: genId() }));
       saveToStorage(); render();
-      showSyncStatus('syncImportStatus',
-        `✓ ${imported} tarefa(s) adicionada(s).${skipped ? ` ${skipped} ignorada(s) por título duplicado.` : ''}`,
-        'success');
-      return;
+      showSyncStatus('syncImportStatus', `✓ ${tasks.length} tarefa(s) importada(s) (substituição completa).`, 'success');
+    } else {
+      const { added, updated } = mergeTaskLists(incoming);
+      saveToStorage(); render();
+      const parts = [];
+      if (added)   parts.push(`${added} adicionada(s)`);
+      if (updated) parts.push(`${updated} atualizada(s)`);
+      const unchanged = incoming.length - added - updated;
+      if (unchanged) parts.push(`${unchanged} sem alteração`);
+      showSyncStatus('syncImportStatus', `✓ Mesclagem concluída: ${parts.join(', ')}.`, 'success');
     }
-
-    saveToStorage();
-    render();
-    showSyncStatus('syncImportStatus', `✓ ${imported} tarefa(s) importada(s) com sucesso!`, 'success');
   } catch (err) {
     showSyncStatus('syncImportStatus', '✗ Erro: ' + err.message, 'error');
   }
+}
+
+// File import handler (.json file)
+function importFileJSON(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    document.getElementById('syncImportText').value = e.target.result;
+    hideSyncStatus('syncImportStatus');
+    if (document.getElementById('syncModal').classList.contains('show')) {
+      switchSyncTab('import');
+    } else {
+      openSyncModal('import');
+    }
+    showSyncStatus('syncImportStatus', `Arquivo "${file.name}" carregado. Revise e clique em Importar.`, 'info');
+  };
+  reader.readAsText(file);
+  event.target.value = '';
 }
 
 // ─── KEYBOARD ───
