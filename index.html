@@ -873,8 +873,9 @@
       border: 1px solid var(--border);
       border-bottom: none;
       border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-      overflow: hidden;
+      overflow: visible;
       background: var(--surface-elevated);
+      position: relative;
     }
 
     .md-tab-btn {
@@ -889,6 +890,10 @@
       cursor: pointer;
       transition: all 0.15s;
       letter-spacing: 0.3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
 
     .md-tab-btn:hover {
@@ -905,15 +910,47 @@
       border-right: 1px solid var(--border);
     }
 
-    /* barra de atalhos */
-    .md-toolbar {
+    /* Chevron de collapse dentro do botão Editar */
+    .md-tab-btn .tab-chevron {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      font-size: 8px;
+      border-radius: 3px;
+      transition: transform 0.25s ease, background 0.15s;
+      color: var(--text-dim);
+      margin-left: 2px;
+    }
+
+    .md-tab-btn:hover .tab-chevron {
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .md-tab-btn .tab-chevron.expanded {
+      transform: rotate(180deg);
+    }
+
+    /* ── COLLAPSIBLE TOOLBAR ──────────────────────────────── */
+    .md-toolbar-collapsible {
       display: flex;
       gap: 2px;
-      padding: 5px 8px;
-      border: 1px solid var(--border);
-      border-top: none;
-      border-bottom: none;
+      padding: 0 8px;
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
       background: var(--surface-elevated);
+      transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
+    }
+
+    .md-toolbar-collapsible.expanded {
+      max-height: 40px;
+      opacity: 1;
+      padding: 5px 8px;
     }
 
     .md-tool-btn {
@@ -932,6 +969,7 @@
       cursor: pointer;
       transition: all 0.12s;
       line-height: 1;
+      flex-shrink: 0;
     }
 
     .md-tool-btn:hover {
@@ -943,6 +981,7 @@
       width: 1px;
       background: var(--border);
       margin: 3px 4px;
+      flex-shrink: 0;
     }
 
     /* area de edicao */
@@ -2019,15 +2058,16 @@
               suporta Markdown</span>
           </label>
 
-          <!-- Abas Editar / Preview -->
+          <!-- Abas Editar / Preview — chevron de collapse integrado no botão Editar -->
           <div class="md-editor-tabs">
-            <button class="md-tab-btn active" id="mdTabPreview" onclick="switchMdTab('preview')">&#128065;
-              Preview</button>
-            <button class="md-tab-btn" id="mdTabEdit" onclick="switchMdTab('edit')">&#9998; Editar</button>
+            <button class="md-tab-btn active" id="mdTabEdit" onclick="switchMdTab('edit')">&#9998; Editar <span
+                class="tab-chevron" id="mdToolbarChevron" onclick="event.stopPropagation(); toggleMdToolbar()"
+                title="Mostrar/ocultar ferramentas de formatação">&#9660;</span></button>
+            <button class="md-tab-btn" id="mdTabPreview" onclick="switchMdTab('preview')">&#128065; Preview</button>
           </div>
 
-          <!-- Barra de atalhos rapidos -->
-          <div class="md-toolbar" id="mdToolbar" style="display:none">
+          <!-- Barra de atalhos colapsável (inicia colapsada) -->
+          <div class="md-toolbar-collapsible" id="mdToolbarContent">
             <button class="md-tool-btn" title="Negrito (Ctrl+B)" onclick="mdInsert('**','**')"><b>B</b></button>
             <button class="md-tool-btn" title="Italico (Ctrl+I)" onclick="mdInsert('*','*')"><i>I</i></button>
             <button class="md-tool-btn" title="Tachado" onclick="mdInsert('~~','~~')"><s>S</s></button>
@@ -2052,12 +2092,11 @@
 
           <!-- Area de edicao e preview -->
           <div class="md-editor-area">
-            <textarea id="taskDesc" style="display:none"
+            <textarea id="taskDesc"
               placeholder="Descreva a tarefa com formatação Markdown...&#10;&#10;**negrito**  *itálico*  `código`&#10;- item de lista&#10;> citação&#10;&#10;## Seção&#10;texto da seção"></textarea>
-            <div class="md-preview-pane md-rendered active" id="mdPreviewPane"></div>
+            <div class="md-preview-pane md-rendered" id="mdPreviewPane"></div>
           </div>
-          <div class="md-hint" style="display:none">Ctrl+B negrito &nbsp;&#183;&nbsp; Ctrl+I itálico &nbsp;&#183;&nbsp;
-            Ctrl+K link
+          <div class="md-hint">Ctrl+B negrito &nbsp;&#183;&nbsp; Ctrl+I itálico &nbsp;&#183;&nbsp; Ctrl+K link
             &nbsp;&#183;&nbsp; Tab = 2 espaços</div>
         </div>
 
@@ -2217,7 +2256,8 @@
       function switchMdTab(tab) {
         const ta = document.getElementById('taskDesc');
         const preview = document.getElementById('mdPreviewPane');
-        const toolbar = document.getElementById('mdToolbar');
+        const toolbarContent = document.getElementById('mdToolbarContent');
+        const chevron = document.getElementById('mdToolbarChevron');
         const btnEdit = document.getElementById('mdTabEdit');
         const btnPrev = document.getElementById('mdTabPreview');
         const hint = ta.parentElement.parentElement.querySelector('.md-hint');
@@ -2226,20 +2266,46 @@
           const html = renderMd(ta.value);
           preview.innerHTML = html || '<p style="color:var(--text-dim);font-style:italic">Nada para visualizar ainda. Escreva algo na aba Editar.</p>';
           ta.style.display = 'none';
-          toolbar.style.display = 'none';
+          toolbarContent.style.display = 'none';
+          if (chevron) chevron.style.display = 'none';
           if (hint) hint.style.display = 'none';
           preview.classList.add('active');
           btnEdit.classList.remove('active');
           btnPrev.classList.add('active');
         } else {
           ta.style.display = '';
-          toolbar.style.display = '';
+          toolbarContent.style.display = '';
+          if (chevron) chevron.style.display = '';
           if (hint) hint.style.display = '';
           preview.classList.remove('active');
           btnEdit.classList.add('active');
           btnPrev.classList.remove('active');
           ta.focus();
         }
+      }
+
+      /* ── COLLAPSIBLE TOOLBAR ────────────────────────────────── */
+
+      function toggleMdToolbar() {
+        var chevron = document.getElementById('mdToolbarChevron');
+        var content = document.getElementById('mdToolbarContent');
+        var isExpanded = chevron.classList.contains('expanded');
+
+        if (isExpanded) {
+          chevron.classList.remove('expanded');
+          content.classList.remove('expanded');
+        } else {
+          chevron.classList.add('expanded');
+          content.classList.add('expanded');
+        }
+      }
+
+      /** Reseta o toolbar para o estado colapsado */
+      function resetMdToolbar() {
+        var chevron = document.getElementById('mdToolbarChevron');
+        var content = document.getElementById('mdToolbarContent');
+        if (chevron) chevron.classList.remove('expanded');
+        if (content) content.classList.remove('expanded');
       }
 
       /* ── BARRA DE FERRAMENTAS MARKDOWN ─────────────────────── */
@@ -2317,7 +2383,10 @@
           mutations.forEach(function (m) {
             if (m.attributeName === 'class' && taskModalEl.classList.contains('show')) {
               // Pequeno delay para garantir que o modal ja foi preenchido pelo app.js
-              setTimeout(function () { switchMdTab('preview'); }, 0);
+              setTimeout(function () {
+                switchMdTab('edit');
+                resetMdToolbar();
+              }, 0);
             }
           });
         }).observe(taskModalEl, { attributes: true });
@@ -2393,6 +2462,8 @@
       window.mdInsertLine = mdInsertLine;
       window.mdInsertBlock = mdInsertBlock;
       window.mdInsertLink = mdInsertLink;
+      window.toggleMdToolbar = toggleMdToolbar;
+      window.resetMdToolbar = resetMdToolbar;
 
     })();
   </script>
