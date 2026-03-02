@@ -7,11 +7,19 @@
   <title>TaskFlow — Gestão de Tarefas</title>
   <link rel="icon"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='8' width='84' height='84' rx='14' fill='%230d9488'/><g transform='translate(50,50)'><path d='M-4,-24h8l2,6 5,2 5-4 6,6-4,5 2,5 6,2v8l-6,2-2,5 4,5-6,6-5-4-5,2-2,6h-8l-2-6-5-2-5,4-6-6 4-5-2-5-6-2v-8l6-2 2-5-4-5 6-6 5,4 5-2z' fill='white' opacity='0.25'/><circle r='10' fill='none' stroke='white' stroke-width='3' opacity='0.5'/></g><circle cx='65' cy='65' r='16' fill='%2334D399'/><path d='M58 65l5 5 9-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+
+  <!-- sql.js WASM -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.11.0/sql-wasm.js"></script>
-  <script src="app.js"></script>
+  <!-- marked.js — renderizador de Markdown -->
+  <script defer="defer" src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <!-- DOMPurify — sanitizacao do HTML gerado pelo Markdown -->
+  <script defer="defer" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js"></script>
+  <script defer="defer" src="app.js"></script>
+
   <link
     href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
+
   <style>
     :root {
       --bg: #0f1117;
@@ -292,12 +300,28 @@
       font-weight: 600;
     }
 
+    /* celula de descricao -- clicavel para abrir o viewer */
     .task-desc-cell {
       color: var(--text-muted);
       max-width: 280px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      cursor: pointer;
+      transition: color 0.15s;
+      user-select: none;
+    }
+
+    .task-desc-cell:hover {
+      color: var(--accent-hover);
+    }
+
+    /* indicador visual de que ha Markdown */
+    .task-desc-cell.has-md::after {
+      content: ' \2736';
+      font-size: 10px;
+      color: var(--accent);
+      opacity: 0.75;
     }
 
     .date-cell {
@@ -843,6 +867,364 @@
       border-top: 1px solid var(--border);
     }
 
+    /* ── MARKDOWN EDITOR ────────────────────────────────────── */
+    .md-editor-tabs {
+      display: flex;
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+      overflow: hidden;
+      background: var(--surface-elevated);
+    }
+
+    .md-tab-btn {
+      flex: 1;
+      padding: 7px 0;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      letter-spacing: 0.3px;
+    }
+
+    .md-tab-btn:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .md-tab-btn.active {
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    .md-tab-btn:first-child {
+      border-right: 1px solid var(--border);
+    }
+
+    /* barra de atalhos */
+    .md-toolbar {
+      display: flex;
+      gap: 2px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-top: none;
+      border-bottom: none;
+      background: var(--surface-elevated);
+    }
+
+    .md-tool-btn {
+      width: 28px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.12s;
+      line-height: 1;
+    }
+
+    .md-tool-btn:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+
+    .md-tool-sep {
+      width: 1px;
+      background: var(--border);
+      margin: 3px 4px;
+    }
+
+    /* area de edicao */
+    .md-editor-area {
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .md-editor-area textarea {
+      border: none !important;
+      border-radius: 0 !important;
+      font-family: 'JetBrains Mono', monospace !important;
+      font-size: 13px !important;
+      line-height: 1.6 !important;
+      min-height: 140px;
+      background: var(--bg) !important;
+      resize: vertical;
+    }
+
+    /* preview dentro do editor */
+    .md-preview-pane {
+      display: none;
+      padding: 14px 16px;
+      min-height: 140px;
+      background: var(--bg);
+      overflow-y: auto;
+      max-height: 340px;
+    }
+
+    .md-preview-pane.active {
+      display: block;
+    }
+
+    /* dica de atalhos */
+    .md-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      padding: 4px 2px 0;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: -0.2px;
+    }
+
+    /* ── MARKDOWN VIEWER MODAL ──────────────────────────────── */
+    .md-viewer-modal {
+      max-width: 700px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .md-viewer-modal .modal-body {
+      padding: 0;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .md-viewer-content {
+      padding: 28px 32px;
+    }
+
+    /* ── ESTILOS DO MARKDOWN RENDERIZADO ──────────────────── */
+    .md-rendered {
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .md-rendered:empty::after {
+      content: 'Sem descricao.';
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
+    .md-rendered h1,
+    .md-rendered h2,
+    .md-rendered h3,
+    .md-rendered h4,
+    .md-rendered h5,
+    .md-rendered h6 {
+      color: var(--text);
+      font-weight: 700;
+      margin: 1.2em 0 0.4em;
+      line-height: 1.3;
+    }
+
+    .md-rendered h1 {
+      font-size: 1.5em;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.3em;
+    }
+
+    .md-rendered h2 {
+      font-size: 1.25em;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.2em;
+    }
+
+    .md-rendered h3 {
+      font-size: 1.1em;
+    }
+
+    .md-rendered h4 {
+      font-size: 1em;
+    }
+
+    .md-rendered h5,
+    .md-rendered h6 {
+      font-size: 0.9em;
+      color: var(--text-muted);
+    }
+
+    .md-rendered p {
+      margin: 0.55em 0;
+    }
+
+    .md-rendered a {
+      color: var(--accent-hover);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .md-rendered a:hover {
+      color: var(--text);
+    }
+
+    .md-rendered strong {
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .md-rendered em {
+      font-style: italic;
+      color: var(--text-muted);
+    }
+
+    .md-rendered del {
+      text-decoration: line-through;
+      color: var(--text-dim);
+    }
+
+    .md-rendered hr {
+      border: none;
+      border-top: 1px solid var(--border-light);
+      margin: 1.4em 0;
+    }
+
+    .md-rendered ul,
+    .md-rendered ol {
+      padding-left: 1.6em;
+      margin: 0.4em 0;
+    }
+
+    .md-rendered li {
+      margin: 0.2em 0;
+    }
+
+    .md-rendered li>ul,
+    .md-rendered li>ol {
+      margin: 0.1em 0;
+    }
+
+    /* checkboxes GFM */
+    .md-rendered input[type="checkbox"] {
+      margin-right: 6px;
+      accent-color: var(--accent);
+      cursor: default;
+    }
+
+    /* remove o bullet dos itens de task list */
+    .md-rendered ul li:has(> input[type="checkbox"]) {
+      list-style: none;
+      margin-left: -1.2em;
+    }
+
+    .md-rendered blockquote {
+      border-left: 3px solid var(--accent);
+      margin: 0.8em 0;
+      padding: 6px 16px;
+      background: rgba(99, 102, 241, 0.07);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      color: var(--text-muted);
+    }
+
+    .md-rendered blockquote p {
+      margin: 0;
+    }
+
+    .md-rendered code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.87em;
+      background: var(--surface-elevated);
+      color: #c4b5fd;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    .md-rendered pre {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      overflow-x: auto;
+      margin: 0.8em 0;
+    }
+
+    .md-rendered pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #a5f3fc;
+      font-size: 0.85em;
+      line-height: 1.6;
+    }
+
+    .md-rendered table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 0.8em 0;
+      font-size: 13px;
+    }
+
+    .md-rendered th {
+      background: var(--surface-elevated);
+      padding: 8px 14px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    .md-rendered td {
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      vertical-align: top;
+    }
+
+    .md-rendered tr:nth-child(even) td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .md-rendered img {
+      max-width: 100%;
+      border-radius: var(--radius-sm);
+      margin: 0.5em 0;
+      border: 1px solid var(--border);
+    }
+
+    /* tooltip do Gantt -- md compacto */
+    .gantt-tooltip .md-rendered {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .gantt-tooltip .md-rendered h1,
+    .gantt-tooltip .md-rendered h2,
+    .gantt-tooltip .md-rendered h3 {
+      font-size: 13px;
+      margin: 0.3em 0 0.2em;
+      border: none;
+    }
+
+    .gantt-tooltip .md-rendered p {
+      margin: 0.15em 0;
+    }
+
+    .gantt-tooltip .md-rendered pre {
+      font-size: 11px;
+      padding: 8px 10px;
+    }
+
+    .gantt-tooltip .md-rendered ul,
+    .gantt-tooltip .md-rendered ol {
+      padding-left: 1.2em;
+    }
+
     /* STATUS DROPDOWN */
     .status-dropdown {
       position: absolute;
@@ -1076,7 +1458,7 @@
       z-index: 500;
       pointer-events: none;
       display: none;
-      max-width: 280px;
+      max-width: 300px;
     }
 
     .gantt-tooltip.show {
@@ -1086,23 +1468,17 @@
     .gantt-tooltip h4 {
       font-size: 14px;
       font-weight: 700;
-      margin-bottom: 4px;
-    }
-
-    .gantt-tooltip p {
-      font-size: 12px;
-      color: var(--text-muted);
-      line-height: 1.5;
+      margin-bottom: 6px;
     }
 
     .gantt-tooltip .tt-dates {
       font-family: 'JetBrains Mono', monospace;
       font-size: 11px;
       color: var(--text-dim);
-      margin-top: 6px;
+      margin-top: 8px;
     }
 
-    /* AUTH SCREEN */
+    /* AUTH */
     .auth-screen {
       min-height: 100vh;
       display: flex;
@@ -1364,6 +1740,10 @@
       .search-input {
         width: 140px;
       }
+
+      .md-viewer-modal {
+        max-width: 100%;
+      }
     }
 
     ::-webkit-scrollbar {
@@ -1399,7 +1779,7 @@
     <div class="auth-card">
       <div class="auth-header">
         <div class="logo">
-          <div class="logo-icon">▦</div> TaskFlow
+          <div class="logo-icon">&#9638;</div> TaskFlow
         </div>
         <p>Gestão inteligente de tarefas</p>
       </div>
@@ -1407,7 +1787,6 @@
         <button class="auth-tab active" onclick="switchAuthTab('login')">Entrar</button>
         <button class="auth-tab" onclick="switchAuthTab('register')">Registrar</button>
       </div>
-      <!-- LOGIN -->
       <div id="loginForm" class="auth-form active">
         <div class="auth-error" id="loginError"></div>
         <div class="form-group"><label>E-mail</label><input type="email" id="loginEmail" placeholder="seu@email.com">
@@ -1416,7 +1795,6 @@
         </div>
         <button class="btn btn-primary" onclick="doLogin()">Entrar</button>
       </div>
-      <!-- REGISTER -->
       <div id="registerForm" class="auth-form">
         <div class="auth-error" id="registerError"></div>
         <div class="form-group"><label>Nome</label><input type="text" id="regName" placeholder="Seu nome"></div>
@@ -1429,13 +1807,12 @@
     </div>
   </div>
 
-  <!-- APP (hidden until login) -->
+  <!-- APP -->
   <div id="appContainer" style="display:none">
 
-    <!-- HEADER -->
     <header class="app-header">
       <div class="logo">
-        <div class="logo-icon">▦</div> TaskFlow
+        <div class="logo-icon">&#9638;</div> TaskFlow
       </div>
       <div class="header-actions">
         <button class="btn" onclick="openSyncModal('export')" title="Exportar">
@@ -1443,26 +1820,22 @@
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
             <polyline points="7 10 12 15 17 10" />
             <line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-          <span>Exportar</span>
+          </svg><span>Exportar</span>
         </button>
         <button class="btn" onclick="openSyncModal('import')" title="Importar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
             <polyline points="17 8 12 3 7 8" />
             <line x1="12" y1="3" x2="12" y2="15" />
-          </svg>
-          <span>Importar</span>
+          </svg><span>Importar</span>
         </button>
         <input type="file" id="csvInput" accept=".json" onchange="importFileJSON(event)">
         <button class="btn btn-primary" onclick="openModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-          <span>Nova Tarefa</span>
+          </svg><span>Nova Tarefa</span>
         </button>
-        <!-- USER MENU -->
         <div class="user-menu-wrapper">
           <button class="user-btn" onclick="toggleUserMenu(event)" id="userMenuBtn">
             <div class="user-avatar" id="userAvatar">U</div>
@@ -1474,38 +1847,44 @@
               <span id="userDropdownEmail">email@email.com</span>
             </div>
             <div class="user-dropdown-divider"></div>
-            <button class="user-dropdown-item" onclick="openProfileModal()">✏️ Editar Perfil</button>
-            <button class="user-dropdown-item" onclick="doLogout()">🚪 Sair</button>
+            <button class="user-dropdown-item" onclick="openProfileModal()">&#9999;&#65039; Editar Perfil</button>
+            <button class="user-dropdown-item" onclick="doLogout()">&#128682; Sair</button>
             <div class="user-dropdown-divider"></div>
-            <button class="user-dropdown-item danger" onclick="doDeleteAccount()">🗑️ Excluir Conta</button>
+            <button class="user-dropdown-item danger" onclick="doDeleteAccount()">&#128465;&#65039; Excluir
+              Conta</button>
           </div>
         </div>
       </div>
     </header>
 
-    <!-- TOOLBAR -->
     <div class="toolbar">
       <div class="toolbar-left">
         <button class="filter-btn active" data-filter="all" onclick="toggleFilter('all', this)">Todas</button>
-        <button class="filter-btn" data-filter="Completed" onclick="toggleFilter('Completed', this)"><span class="dot"
+        <button class="filter-btn" data-filter="Completed" onclick="toggleFilter('Completed', this)">
+          <span class="dot"
             style="background:var(--completed);width:8px;height:8px;border-radius:50%;display:inline-block"></span>
-          Completed</button>
-        <button class="filter-btn" data-filter="In Progress" onclick="toggleFilter('In Progress', this)"><span
-            class="dot"
+          Completed
+        </button>
+        <button class="filter-btn" data-filter="In Progress" onclick="toggleFilter('In Progress', this)">
+          <span class="dot"
             style="background:var(--inprogress);width:8px;height:8px;border-radius:50%;display:inline-block"></span> In
-          Progress</button>
-        <button class="filter-btn" data-filter="To Do" onclick="toggleFilter('To Do', this)"><span class="dot"
-            style="background:var(--todo);width:8px;height:8px;border-radius:50%;display:inline-block"></span> To
-          Do</button>
-        <button class="filter-btn" data-filter="Overdue" onclick="toggleFilter('Overdue', this)"><span class="dot"
+          Progress
+        </button>
+        <button class="filter-btn" data-filter="To Do" onclick="toggleFilter('To Do', this)">
+          <span class="dot"
+            style="background:var(--todo);width:8px;height:8px;border-radius:50%;display:inline-block"></span> To Do
+        </button>
+        <button class="filter-btn" data-filter="Overdue" onclick="toggleFilter('Overdue', this)">
+          <span class="dot"
             style="background:var(--overdue);width:8px;height:8px;border-radius:50%;display:inline-block"></span>
-          Overdue</button>
+          Overdue
+        </button>
       </div>
-      <div class="toolbar-right"><input type="text" class="search-input" placeholder="Buscar tarefas..."
-          oninput="searchTasks(this.value)"></div>
+      <div class="toolbar-right">
+        <input type="text" class="search-input" placeholder="Buscar tarefas..." oninput="searchTasks(this.value)">
+      </div>
     </div>
 
-    <!-- VIEW TABS -->
     <div class="view-tabs">
       <button class="view-tab active" data-view="table" onclick="switchView('table', this)">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
@@ -1526,7 +1905,6 @@
       </button>
     </div>
 
-    <!-- MAIN CONTENT -->
     <div class="main-content">
       <div id="tableView" class="table-container">
         <table class="task-table">
@@ -1543,7 +1921,7 @@
           <tbody id="taskTableBody"></tbody>
         </table>
         <div id="emptyState" class="empty-state" style="display:none">
-          <div class="empty-icon">📋</div>
+          <div class="empty-icon">&#128203;</div>
           <h3>Nenhuma tarefa encontrada</h3>
           <p>Crie sua primeira tarefa para começar a gerenciar seu projeto.</p>
           <button class="btn btn-primary" onclick="openModal()">
@@ -1556,9 +1934,9 @@
       </div>
       <div id="ganttView" style="display:none">
         <div class="gantt-nav">
-          <button class="btn" onclick="ganttPrev()">◀</button>
+          <button class="btn" onclick="ganttPrev()">&#9664;</button>
           <div class="gantt-nav-label" id="ganttNavLabel"></div>
-          <button class="btn" onclick="ganttNext()">▶</button>
+          <button class="btn" onclick="ganttNext()">&#9654;</button>
           <button class="btn" onclick="ganttToday()">Hoje</button>
         </div>
         <div class="gantt-container">
@@ -1573,12 +1951,13 @@
   <div class="modal-overlay" id="syncModal">
     <div class="modal sync-modal">
       <div class="modal-header">
-        <h2 id="syncModalTitle">Sincronizar Tarefas</h2><button class="modal-close"
-          onclick="closeSyncModal()">✕</button>
+        <h2 id="syncModalTitle">Sincronizar Tarefas</h2>
+        <button class="modal-close" onclick="closeSyncModal()">&#x2715;</button>
       </div>
       <div class="sync-tabs">
-        <button class="sync-tab active" id="syncTabExport" onclick="switchSyncTab('export')">📤 Exportar</button>
-        <button class="sync-tab" id="syncTabImport" onclick="switchSyncTab('import')">📥 Importar / Mesclar</button>
+        <button class="sync-tab active" id="syncTabExport" onclick="switchSyncTab('export')">&#128228; Exportar</button>
+        <button class="sync-tab" id="syncTabImport" onclick="switchSyncTab('import')">&#128229; Importar /
+          Mesclar</button>
       </div>
       <div class="modal-body">
         <div class="sync-panel active" id="syncPanelExport">
@@ -1594,16 +1973,17 @@
         </div>
         <div class="sync-panel" id="syncPanelImport">
           <p class="sync-hint">Cole o JSON aqui ou carregue um arquivo <code>.json</code>.</p>
-          <div style="display:flex;gap:8px;margin-bottom:10px"><button class="btn"
-              style="font-size:12px;padding:6px 14px" onclick="triggerFileImport()">Carregar arquivo .json</button>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button class="btn" style="font-size:12px;padding:6px 14px" onclick="triggerFileImport()">Carregar arquivo
+              .json</button>
           </div>
           <textarea class="sync-textarea" id="syncImportText" placeholder="Cole o JSON aqui..."></textarea>
           <p class="sync-hint" style="margin-top:10px">Modo de mesclagem:</p>
           <div class="import-mode-group">
-            <button class="import-mode-btn active" id="importModeMerge" onclick="setImportMode('merge')">🔀
+            <button class="import-mode-btn active" id="importModeMerge" onclick="setImportMode('merge')">&#128256;
               Mesclar<br><small style="font-weight:400;opacity:0.7">Adiciona novas; sobrescreve
                 existentes</small></button>
-            <button class="import-mode-btn" id="importModeReplace" onclick="setImportMode('replace')">🔄
+            <button class="import-mode-btn" id="importModeReplace" onclick="setImportMode('replace')">&#128260;
               Substituir<br><small style="font-weight:400;opacity:0.7">Descarta tudo e importa o
                 conjunto</small></button>
           </div>
@@ -1612,24 +1992,75 @@
       </div>
       <div class="modal-footer" id="syncModalFooter">
         <button class="btn" onclick="closeSyncModal()">Fechar</button>
-        <button class="btn btn-primary" id="syncImportBtn" onclick="executeSyncImport()" style="display:none">📥
+        <button class="btn btn-primary" id="syncImportBtn" onclick="executeSyncImport()" style="display:none">&#128229;
           Importar Tarefas</button>
       </div>
     </div>
   </div>
 
-  <!-- TASK MODAL -->
+  <!-- TASK MODAL com editor Markdown -->
   <div class="modal-overlay" id="taskModal">
     <div class="modal">
       <div class="modal-header">
-        <h2 id="modalTitle">Nova Tarefa</h2><button class="modal-close" onclick="closeModal()">✕</button>
+        <h2 id="modalTitle">Nova Tarefa</h2>
+        <button class="modal-close" onclick="closeModal()">&#x2715;</button>
       </div>
       <div class="modal-body">
-        <div class="form-group"><label>Título</label><input type="text" id="taskTitle" placeholder="Nome da tarefa">
+        <div class="form-group">
+          <label>Título</label>
+          <input type="text" id="taskTitle" placeholder="Nome da tarefa">
         </div>
-        <div class="form-group"><label>Descrição</label><textarea id="taskDesc"
-            placeholder="Descreva a tarefa..."></textarea></div>
-        <div class="form-group"><label>Status</label>
+
+        <!-- Campo de descricao com suporte a Markdown -->
+        <div class="form-group" style="margin-bottom:18px">
+          <label>
+            Descrição
+            <span style="font-weight:400;text-transform:none;font-size:11px;color:var(--text-dim);letter-spacing:0"> —
+              suporta Markdown</span>
+          </label>
+
+          <!-- Abas Editar / Preview -->
+          <div class="md-editor-tabs">
+            <button class="md-tab-btn active" id="mdTabEdit" onclick="switchMdTab('edit')">&#9998; Editar</button>
+            <button class="md-tab-btn" id="mdTabPreview" onclick="switchMdTab('preview')">&#128065; Preview</button>
+          </div>
+
+          <!-- Barra de atalhos rapidos -->
+          <div class="md-toolbar" id="mdToolbar">
+            <button class="md-tool-btn" title="Negrito (Ctrl+B)" onclick="mdInsert('**','**')"><b>B</b></button>
+            <button class="md-tool-btn" title="Italico (Ctrl+I)" onclick="mdInsert('*','*')"><i>I</i></button>
+            <button class="md-tool-btn" title="Tachado" onclick="mdInsert('~~','~~')"><s>S</s></button>
+            <div class="md-tool-sep"></div>
+            <button class="md-tool-btn" title="Heading H1" onclick="mdInsertLine('# ')">H1</button>
+            <button class="md-tool-btn" title="Heading H2" onclick="mdInsertLine('## ')">H2</button>
+            <button class="md-tool-btn" title="Heading H3" onclick="mdInsertLine('### ')">H3</button>
+            <div class="md-tool-sep"></div>
+            <button class="md-tool-btn" title="Lista nao ordenada" onclick="mdInsertLine('- ')">&#8226;</button>
+            <button class="md-tool-btn" title="Lista numerada" onclick="mdInsertLine('1. ')">#</button>
+            <button class="md-tool-btn" title="Checkbox" onclick="mdInsertLine('- [ ] ')">&#9744;</button>
+            <div class="md-tool-sep"></div>
+            <button class="md-tool-btn" title="Citacao" onclick="mdInsertLine('> ')">&ldquo;</button>
+            <button class="md-tool-btn" title="Codigo inline" onclick="mdInsert('`','`')"
+              style="font-size:11px">&lt;/&gt;</button>
+            <button class="md-tool-btn" title="Bloco de codigo" onclick="mdInsertBlock('```\n','\n```')"
+              style="font-size:9px">```</button>
+            <div class="md-tool-sep"></div>
+            <button class="md-tool-btn" title="Link (Ctrl+K)" onclick="mdInsertLink()">&#128279;</button>
+            <button class="md-tool-btn" title="Linha horizontal" onclick="mdInsertLine('---')">&#8212;</button>
+          </div>
+
+          <!-- Area de edicao e preview -->
+          <div class="md-editor-area">
+            <textarea id="taskDesc"
+              placeholder="Descreva a tarefa com formatação Markdown...&#10;&#10;**negrito**  *itálico*  `código`&#10;- item de lista&#10;> citação&#10;&#10;## Seção&#10;texto da seção"></textarea>
+            <div class="md-preview-pane md-rendered" id="mdPreviewPane"></div>
+          </div>
+          <div class="md-hint">Ctrl+B negrito &nbsp;&#183;&nbsp; Ctrl+I itálico &nbsp;&#183;&nbsp; Ctrl+K link
+            &nbsp;&#183;&nbsp; Tab = 2 espaços</div>
+        </div>
+
+        <div class="form-group">
+          <label>Status</label>
           <select id="taskStatus">
             <option value="To Do">To Do</option>
             <option value="In Progress">In Progress</option>
@@ -1642,8 +2073,26 @@
           <div class="form-group"><label>Data de Término</label><input type="date" id="taskEnd"></div>
         </div>
       </div>
-      <div class="modal-footer"><button class="btn" onclick="closeModal()">Cancelar</button><button
-          class="btn btn-primary" onclick="saveTask()" id="saveBtn">Criar Tarefa</button></div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveTask()" id="saveBtn">Criar Tarefa</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MARKDOWN VIEWER MODAL (somente leitura, descricao completa) -->
+  <div class="modal-overlay" id="mdViewerModal">
+    <div class="modal md-viewer-modal">
+      <div class="modal-header">
+        <h2 id="mdViewerTitle">Descrição</h2>
+        <button class="modal-close" onclick="closeMdViewer()">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="md-viewer-content md-rendered" id="mdViewerContent"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeMdViewer()">Fechar</button>
+      </div>
     </div>
   </div>
 
@@ -1651,17 +2100,22 @@
   <div class="modal-overlay" id="profileModal">
     <div class="modal">
       <div class="modal-header">
-        <h2>Editar Perfil</h2><button class="modal-close" onclick="closeProfileModal()">✕</button>
+        <h2>Editar Perfil</h2>
+        <button class="modal-close" onclick="closeProfileModal()">&#x2715;</button>
       </div>
       <div class="modal-body">
         <div class="auth-error" id="profileError"></div>
         <div class="form-group"><label>Nome</label><input type="text" id="profileName"></div>
         <div class="form-group"><label>E-mail</label><input type="email" id="profileEmail"></div>
-        <div class="form-group"><label>Nova Senha (deixe vazio para manter)</label><input type="password"
-            id="profilePassword" placeholder="Nova senha"></div>
+        <div class="form-group">
+          <label>Nova Senha (deixe vazio para manter)</label>
+          <input type="password" id="profilePassword" placeholder="Nova senha">
+        </div>
       </div>
-      <div class="modal-footer"><button class="btn" onclick="closeProfileModal()">Cancelar</button><button
-          class="btn btn-primary" onclick="saveProfile()">Salvar</button></div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeProfileModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveProfile()">Salvar</button>
+      </div>
     </div>
   </div>
 
@@ -1680,10 +2134,266 @@
   <!-- GANTT TOOLTIP -->
   <div class="gantt-tooltip" id="ganttTooltip">
     <h4 id="ttTitle"></h4>
-    <p id="ttDesc"></p>
+    <div class="md-rendered" id="ttDesc"></div>
     <div class="tt-dates" id="ttDates"></div>
   </div>
   <div class="drag-date-indicator" id="dragDateIndicator"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+     MARKDOWN INTEGRATION SCRIPT
+     Expoe funcoes globais que o app.js pode (e deve) chamar.
+     ═══════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      'use strict';
+
+      /* ── Configuracao do marked.js ─────────────────────────── */
+      if (typeof marked !== 'undefined') {
+        marked.setOptions({ gfm: true, breaks: true });
+      }
+
+      /* ── Utilitarios ────────────────────────────────────────── */
+
+      /** Converte Markdown para HTML sanitizado */
+      function renderMd(text) {
+        if (!text || !text.trim()) return '';
+        if (typeof marked === 'undefined') return _escHtml(text);
+        const raw = marked.parse(text);
+        return (typeof DOMPurify !== 'undefined')
+          ? DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
+          : raw;
+      }
+
+      function _escHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      /** Extrai texto simples do Markdown para exibicao resumida na celula */
+      function mdToPlainText(md) {
+        if (!md) return '';
+        return md
+          .replace(/!\[.*?\]\(.*?\)/g, '')
+          .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')
+          .replace(/`{1,3}[\s\S]*?`{1,3}/g, '')
+          .replace(/#{1,6} /g, '')
+          .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, '$1')
+          .replace(/~~([^~]+)~~/g, '$1')
+          .replace(/^[-*+] /gm, '')
+          .replace(/^\d+\. /gm, '')
+          .replace(/^> /gm, '')
+          .replace(/\n+/g, ' ')
+          .trim();
+      }
+
+      /** Retorna true se o texto contem formatacao Markdown relevante */
+      function hasMdFormatting(text) {
+        if (!text) return false;
+        return /(\*{1,2}|_{1,2}|`|^#{1,6} |^- |\[.*?\]\(|^> |~~|\n)/m.test(text);
+      }
+
+      /* ── VIEWER MODAL ───────────────────────────────────────── */
+
+      function openMdViewer(title, mdText) {
+        document.getElementById('mdViewerTitle').textContent = title || 'Descricao';
+        const content = document.getElementById('mdViewerContent');
+        const html = renderMd(mdText);
+        content.innerHTML = html || '<p style="color:var(--text-dim);font-style:italic">Sem descricao.</p>';
+        document.getElementById('mdViewerModal').classList.add('show');
+      }
+
+      function closeMdViewer() {
+        document.getElementById('mdViewerModal').classList.remove('show');
+      }
+
+      // Fechar ao clicar fora
+      document.getElementById('mdViewerModal').addEventListener('click', function (e) {
+        if (e.target === this) closeMdViewer();
+      });
+
+      /* ── EDITOR: abas Editar / Preview ─────────────────────── */
+
+      function switchMdTab(tab) {
+        const ta = document.getElementById('taskDesc');
+        const preview = document.getElementById('mdPreviewPane');
+        const toolbar = document.getElementById('mdToolbar');
+        const btnEdit = document.getElementById('mdTabEdit');
+        const btnPrev = document.getElementById('mdTabPreview');
+        const hint = ta.parentElement.parentElement.querySelector('.md-hint');
+
+        if (tab === 'preview') {
+          const html = renderMd(ta.value);
+          preview.innerHTML = html || '<p style="color:var(--text-dim);font-style:italic">Nada para visualizar ainda. Escreva algo na aba Editar.</p>';
+          ta.style.display = 'none';
+          toolbar.style.display = 'none';
+          if (hint) hint.style.display = 'none';
+          preview.classList.add('active');
+          btnEdit.classList.remove('active');
+          btnPrev.classList.add('active');
+        } else {
+          ta.style.display = '';
+          toolbar.style.display = '';
+          if (hint) hint.style.display = '';
+          preview.classList.remove('active');
+          btnEdit.classList.add('active');
+          btnPrev.classList.remove('active');
+          ta.focus();
+        }
+      }
+
+      /* ── BARRA DE FERRAMENTAS MARKDOWN ─────────────────────── */
+
+      function mdInsert(before, after) {
+        const ta = document.getElementById('taskDesc');
+        if (!ta || ta.style.display === 'none') return;
+        const s = ta.selectionStart, e = ta.selectionEnd;
+        const sel = ta.value.substring(s, e) || 'texto';
+        ta.setRangeText(before + sel + after, s, e, 'select');
+        if (s === e) {
+          ta.selectionStart = s + before.length;
+          ta.selectionEnd = s + before.length + sel.length;
+        }
+        ta.focus();
+        ta.dispatchEvent(new Event('input'));
+      }
+
+      function mdInsertLine(prefix) {
+        const ta = document.getElementById('taskDesc');
+        if (!ta || ta.style.display === 'none') return;
+        const s = ta.selectionStart;
+        const lineStart = ta.value.lastIndexOf('\n', s - 1) + 1;
+        ta.setRangeText(prefix, lineStart, lineStart, 'end');
+        ta.focus();
+        ta.dispatchEvent(new Event('input'));
+      }
+
+      function mdInsertBlock(before, after) {
+        const ta = document.getElementById('taskDesc');
+        if (!ta || ta.style.display === 'none') return;
+        const s = ta.selectionStart, e = ta.selectionEnd;
+        const sel = ta.value.substring(s, e) || 'codigo aqui';
+        ta.setRangeText(before + sel + after, s, e, 'end');
+        ta.focus();
+        ta.dispatchEvent(new Event('input'));
+      }
+
+      function mdInsertLink() {
+        const ta = document.getElementById('taskDesc');
+        if (!ta || ta.style.display === 'none') return;
+        const s = ta.selectionStart, e = ta.selectionEnd;
+        const sel = ta.value.substring(s, e) || 'texto do link';
+        ta.setRangeText('[' + sel + '](https://)', s, e, 'end');
+        ta.focus();
+        ta.dispatchEvent(new Event('input'));
+      }
+
+      /* ── ATALHOS DE TECLADO ─────────────────────────────────── */
+
+      document.addEventListener('DOMContentLoaded', function () {
+        const ta = document.getElementById('taskDesc');
+        if (!ta) return;
+
+        ta.addEventListener('keydown', function (e) {
+          if (e.ctrlKey || e.metaKey) {
+            if (e.key === 'b') { e.preventDefault(); mdInsert('**', '**'); }
+            if (e.key === 'i') { e.preventDefault(); mdInsert('*', '*'); }
+            if (e.key === 'k') { e.preventDefault(); mdInsertLink(); }
+          }
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            const s = ta.selectionStart, end = ta.selectionEnd;
+            ta.setRangeText('  ', s, end, 'end');
+            ta.dispatchEvent(new Event('input'));
+          }
+        });
+      });
+
+      /* ── RESET DO EDITOR AO ABRIR O MODAL ──────────────────── */
+
+      const taskModalEl = document.getElementById('taskModal');
+      if (taskModalEl) {
+        new MutationObserver(function (mutations) {
+          mutations.forEach(function (m) {
+            if (m.attributeName === 'class' && taskModalEl.classList.contains('show')) {
+              // Pequeno delay para garantir que o modal ja foi preenchido pelo app.js
+              setTimeout(function () { switchMdTab('edit'); }, 0);
+            }
+          });
+        }).observe(taskModalEl, { attributes: true });
+      }
+
+      /* ── API PUBLICA (chamada pelo app.js) ──────────────────── */
+
+      /**
+       * Configura a celula de descricao na tabela.
+       * Chame em app.js ao gerar cada <td> de descricao:
+       *
+       *   window.setupDescCell(tdElement, task.title, task.description);
+       *
+       * O td deve ter a classe "task-desc-cell" aplicada pelo app.js OU
+       * esta funcao a adiciona automaticamente.
+       */
+      window.setupDescCell = function (td, taskTitle, desc) {
+        td.classList.add('task-desc-cell');
+        const plain = mdToPlainText(desc);
+        td.textContent = plain || '\u2014'; // em dash se vazio
+        if (hasMdFormatting(desc)) {
+          td.classList.add('has-md');
+        } else {
+          td.classList.remove('has-md');
+        }
+        if (desc && desc.trim()) {
+          td.setAttribute('title', 'Clique para ver a descricao completa');
+          td.onclick = function (e) {
+            e.stopPropagation();
+            openMdViewer(taskTitle, desc);
+          };
+        } else {
+          td.removeAttribute('title');
+          td.onclick = null;
+        }
+      };
+
+      /**
+       * Preenche a descricao no tooltip do Gantt com Markdown renderizado.
+       * Chame em app.js ao mostrar o tooltip:
+       *
+       *   window.setGanttTooltipDesc(task.description);
+       */
+      window.setGanttTooltipDesc = function (text) {
+        const el = document.getElementById('ttDesc');
+        if (!el) return;
+        el.innerHTML = text ? renderMd(text) : '';
+      };
+
+      /**
+       * Renderiza Markdown para HTML sanitizado.
+       * Disponivel para uso geral no app.js:
+       *
+       *   const html = window.renderMarkdown('**negrito**');
+       */
+      window.renderMarkdown = renderMd;
+
+      /**
+       * Converte Markdown para texto simples.
+       * Util para buscas e previews curtos:
+       *
+       *   const plain = window.mdToPlain('# Titulo\n**negrito**');
+       */
+      window.mdToPlain = mdToPlainText;
+
+      /** Abre o viewer de descricao (pode ser chamado pelo app.js) */
+      window.openMdViewer = openMdViewer;
+      window.closeMdViewer = closeMdViewer;
+
+      /** Funcoes do editor expostas globalmente (usadas nos onclick do HTML) */
+      window.switchMdTab = switchMdTab;
+      window.mdInsert = mdInsert;
+      window.mdInsertLine = mdInsertLine;
+      window.mdInsertBlock = mdInsertBlock;
+      window.mdInsertLink = mdInsertLink;
+
+    })();
+  </script>
 
 </body>
 
