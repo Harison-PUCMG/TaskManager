@@ -65,8 +65,25 @@ async function initDatabase() {
     status TEXT DEFAULT 'To Do',
     start_date TEXT NOT NULL,
     end_date TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    modified_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
+    // Migrate: add created_at and modified_at columns if missing (old DBs)
+    try {
+        const cols = db.exec("PRAGMA table_info(tasks)");
+        if (cols.length > 0) {
+            const colNames = cols[0].values.map(r => r[1]);
+            if (!colNames.includes('created_at')) {
+                db.run("ALTER TABLE tasks ADD COLUMN created_at TEXT DEFAULT (datetime('now'))");
+                db.run("UPDATE tasks SET created_at = datetime('now') WHERE created_at IS NULL");
+            }
+            if (!colNames.includes('modified_at')) {
+                db.run("ALTER TABLE tasks ADD COLUMN modified_at TEXT DEFAULT (datetime('now'))");
+                db.run("UPDATE tasks SET modified_at = datetime('now') WHERE modified_at IS NULL");
+            }
+        }
+    } catch (e) { /* columns already exist */ }
     await saveDBToIDB();
 
     // Migrate old localStorage tasks if they exist
@@ -110,8 +127,9 @@ async function doRegister() {
     if (window._migrationTasks && window._migrationTasks.length > 0) {
         for (const t of window._migrationTasks) {
             const id = t.id || genId();
-            db.run("INSERT OR IGNORE INTO tasks (id, user_id, title, description, status, start_date, end_date) VALUES (?,?,?,?,?,?,?)",
-                [id, currentUser.id, t.title || '', t.description || '', t.status || 'To Do', t.startDate || '', t.endDate || '']);
+            const now = new Date().toISOString();
+            db.run("INSERT OR IGNORE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                [id, currentUser.id, t.title || '', t.description || '', t.status || 'To Do', t.startDate || '', t.endDate || '', now, now]);
         }
         await saveDBToIDB();
         localStorage.removeItem('taskflow_tasks');
@@ -238,17 +256,23 @@ function showApp() {
 // ─── TASK DB OPERATIONS ───
 function loadTasksFromDB() {
     tasks = [];
-    const res = db.exec("SELECT id, title, description, status, start_date, end_date FROM tasks WHERE user_id = ?", [currentUser.id]);
+    const now = new Date().toISOString();
+    const res = db.exec("SELECT id, title, description, status, start_date, end_date, created_at, modified_at FROM tasks WHERE user_id = ?", [currentUser.id]);
     if (res.length > 0) {
         for (const row of res[0].values) {
-            tasks.push({ id: row[0], title: row[1], description: row[2], status: row[3], startDate: row[4], endDate: row[5] });
+            tasks.push({
+                id: row[0], title: row[1], description: row[2], status: row[3],
+                startDate: row[4], endDate: row[5],
+                createdAt: row[6] || now,
+                modifiedAt: row[7] || now
+            });
         }
     }
 }
 
 async function saveTaskToDB(t) {
-    db.run("INSERT OR REPLACE INTO tasks (id, user_id, title, description, status, start_date, end_date) VALUES (?,?,?,?,?,?,?)",
-        [t.id, currentUser.id, t.title, t.description, t.status, t.startDate, t.endDate]);
+    db.run("INSERT OR REPLACE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        [t.id, currentUser.id, t.title, t.description, t.status, t.startDate, t.endDate, t.createdAt, t.modifiedAt]);
     await saveDBToIDB();
 }
 
@@ -258,10 +282,9 @@ async function deleteTaskFromDB(id) {
 }
 
 async function saveAllTasksToDB() {
-    // Batch save all current tasks
     for (const t of tasks) {
-        db.run("INSERT OR REPLACE INTO tasks (id, user_id, title, description, status, start_date, end_date) VALUES (?,?,?,?,?,?,?)",
-            [t.id, currentUser.id, t.title, t.description, t.status, t.startDate, t.endDate]);
+        db.run("INSERT OR REPLACE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            [t.id, currentUser.id, t.title, t.description, t.status, t.startDate, t.endDate, t.createdAt, t.modifiedAt]);
     }
     await saveDBToIDB();
 }
@@ -285,8 +308,8 @@ function autoUpdateStatuses() {
         if (t.status === 'Completed') return;
         const endDate = new Date(t.endDate + 'T00:00:00');
         const startDate = new Date(t.startDate + 'T00:00:00');
-        if (today > endDate && t.status !== 'Overdue') { t.status = 'Overdue'; changed = true; }
-        else if (t.status === 'To Do' && today >= startDate && today <= endDate) { t.status = 'In Progress'; changed = true; }
+        if (today > endDate && t.status !== 'Overdue') { t.status = 'Overdue'; t.modifiedAt = new Date().toISOString(); changed = true; }
+        else if (t.status === 'To Do' && today >= startDate && today <= endDate) { t.status = 'In Progress'; t.modifiedAt = new Date().toISOString(); changed = true; }
     });
     if (changed) saveToStorage();
 }
@@ -334,6 +357,7 @@ function ganttNext() { ganttStartDate.setDate(ganttStartDate.getDate() + 7); ren
 function ganttToday() { ganttStartDate = getGanttDefaultStart(); renderGantt(); }
 
 function renderGantt() {
+    if (!ganttStartDate) ganttStartDate = getGanttDefaultStart();
     const filtered = getFilteredTasks();
     const container = document.getElementById('ganttContent');
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -444,6 +468,7 @@ document.addEventListener('mouseup', e => {
     document.body.style.cursor = ''; document.body.style.userSelect = ''; hideDragIndicator();
     const dx = Math.abs(e.clientX - dragState.startX);
     if (dx < 3 && dragState.type === 'move') { const task = tasks.find(t => t.id === dragState.taskId); if (task) { task.startDate = dragState.origStartDate; task.endDate = dragState.origEndDate; } dragState.active = false; editTask(dragState.taskId); return; }
+    const draggedTask = tasks.find(t => t.id === dragState.taskId); if (draggedTask) draggedTask.modifiedAt = new Date().toISOString();
     saveToStorage(); dragState.active = false; render();
 });
 
@@ -489,8 +514,8 @@ function saveTask() {
     const status = document.getElementById('taskStatus').value, startDate = document.getElementById('taskStart').value, endDate = document.getElementById('taskEnd').value;
     if (!title) { document.getElementById('taskTitle').focus(); return; } if (!startDate || !endDate) return;
     if (endDate < startDate) { alert('A data de término deve ser igual ou posterior à data de início.'); return; }
-    if (editingId) { const t = tasks.find(tk => tk.id === editingId); t.title = title; t.description = desc; t.status = status; t.startDate = startDate; t.endDate = endDate; }
-    else { tasks.push({ id: genId(), title, description: desc, status, startDate, endDate }); }
+    if (editingId) { const t = tasks.find(tk => tk.id === editingId); t.title = title; t.description = desc; t.status = status; t.startDate = startDate; t.endDate = endDate; t.modifiedAt = new Date().toISOString(); }
+    else { const now = new Date().toISOString(); tasks.push({ id: genId(), title, description: desc, status, startDate, endDate, createdAt: now, modifiedAt: now }); }
     saveToStorage(); closeModal(); render();
 }
 function editTask(id) { openModal(id); }
@@ -498,7 +523,7 @@ function deleteTask(id) { if (!confirm('Tem certeza que deseja excluir esta tare
 
 // ─── STATUS DROPDOWN ───
 function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
-function changeStatus(ns) { if (statusChangeId) { const t = tasks.find(tk => tk.id === statusChangeId); if (t) { t.status = ns; saveToStorage(); render(); } } document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null; }
+function changeStatus(ns) { if (statusChangeId) { const t = tasks.find(tk => tk.id === statusChangeId); if (t) { t.status = ns; t.modifiedAt = new Date().toISOString(); saveToStorage(); render(); } } document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null; }
 document.addEventListener('click', () => { document.getElementById('statusDropdown').classList.remove('show'); closeUserDropdown(); });
 
 // ─── SYNC MODAL ───
@@ -510,19 +535,36 @@ function setImportMode(m) { syncImportMode = m; document.getElementById('importM
 function triggerFileImport() { document.getElementById('csvInput').click(); }
 function showSyncStatus(id, msg, type) { const el = document.getElementById(id); el.textContent = msg; el.className = 'sync-status ' + type; }
 function hideSyncStatus(id) { document.getElementById(id).className = 'sync-status'; }
-function generateSyncExport() { const text = JSON.stringify(tasks, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
+function generateSyncExport() { const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt })); const text = JSON.stringify(exportData, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
 function copySyncExport() { const ta = document.getElementById('syncExportText'); if (!ta.value) generateSyncExport(); navigator.clipboard.writeText(ta.value).then(() => { showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }).catch(() => { ta.select(); document.execCommand('copy'); showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }); }
 function downloadSyncExport() { if (!document.getElementById('syncExportText').value) generateSyncExport(); const text = document.getElementById('syncExportText').value; const blob = new Blob([text], { type: 'application/json;charset=utf-8;' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `taskflow_${new Date().toISOString().split('T')[0]}.json`; a.click(); URL.revokeObjectURL(url); showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success'); }
 
 function parseImportedJSON(text) {
     const parsed = JSON.parse(text); if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array.');
     const vs = ['Completed', 'In Progress', 'To Do', 'Overdue'];
-    return parsed.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || new Date().toISOString().split('T')[0], endDate: t.endDate || new Date().toISOString().split('T')[0] })).filter(t => t.title);
+    const now = new Date().toISOString();
+    return parsed.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || new Date().toISOString().split('T')[0], endDate: t.endDate || new Date().toISOString().split('T')[0], createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
 }
 function mergeTaskLists(incoming) {
     let added = 0, updated = 0;
     const byTitle = new Map(tasks.map(t => [t.title.toLowerCase(), t]));
-    for (const inc of incoming) { const key = inc.title.toLowerCase(); if (byTitle.has(key)) { const ex = byTitle.get(key); if (ex.status !== inc.status || ex.startDate !== inc.startDate || ex.endDate !== inc.endDate) { ex.status = inc.status; ex.startDate = inc.startDate; ex.endDate = inc.endDate; if (!ex.description && inc.description) ex.description = inc.description; updated++; } } else { tasks.push({ ...inc, id: genId() }); added++; } }
+    for (const inc of incoming) {
+        const key = inc.title.toLowerCase();
+        if (byTitle.has(key)) {
+            const ex = byTitle.get(key);
+            const exMod = ex.modifiedAt || '1970-01-01T00:00:00.000Z';
+            const incMod = inc.modifiedAt || '1970-01-01T00:00:00.000Z';
+            if (incMod > exMod) {
+                ex.status = inc.status; ex.startDate = inc.startDate; ex.endDate = inc.endDate;
+                ex.description = inc.description || ex.description;
+                ex.modifiedAt = inc.modifiedAt;
+                if (inc.createdAt && (!ex.createdAt || inc.createdAt < ex.createdAt)) ex.createdAt = inc.createdAt;
+                updated++;
+            } else if (exMod === incMod) {
+                if (!ex.description && inc.description) { ex.description = inc.description; updated++; }
+            }
+        } else { tasks.push({ ...inc, id: genId() }); added++; }
+    }
     return { added, updated };
 }
 function executeSyncImport() {
@@ -531,9 +573,9 @@ function executeSyncImport() {
     try {
         const incoming = parseImportedJSON(text); if (incoming.length === 0) throw new Error('Nenhuma tarefa válida.');
         if (syncImportMode === 'replace') {
-            // Delete all existing tasks for this user
             db.run("DELETE FROM tasks WHERE user_id = ?", [currentUser.id]);
-            tasks = incoming.map(t => ({ ...t, id: genId() }));
+            const now = new Date().toISOString();
+            tasks = incoming.map(t => ({ ...t, id: genId(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now }));
             saveToStorage(); render();
             showSyncStatus('syncImportStatus', `✓ ${tasks.length} tarefa(s) importada(s) (substituição).`, 'success');
         } else {
