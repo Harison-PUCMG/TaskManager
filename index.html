@@ -2021,12 +2021,13 @@
 
           <!-- Abas Editar / Preview -->
           <div class="md-editor-tabs">
-            <button class="md-tab-btn active" id="mdTabEdit" onclick="switchMdTab('edit')">&#9998; Editar</button>
-            <button class="md-tab-btn" id="mdTabPreview" onclick="switchMdTab('preview')">&#128065; Preview</button>
+            <button class="md-tab-btn active" id="mdTabPreview" onclick="switchMdTab('preview')">&#128065;
+              Preview</button>
+            <button class="md-tab-btn" id="mdTabEdit" onclick="switchMdTab('edit')">&#9998; Editar</button>
           </div>
 
           <!-- Barra de atalhos rapidos -->
-          <div class="md-toolbar" id="mdToolbar">
+          <div class="md-toolbar" id="mdToolbar" style="display:none">
             <button class="md-tool-btn" title="Negrito (Ctrl+B)" onclick="mdInsert('**','**')"><b>B</b></button>
             <button class="md-tool-btn" title="Italico (Ctrl+I)" onclick="mdInsert('*','*')"><i>I</i></button>
             <button class="md-tool-btn" title="Tachado" onclick="mdInsert('~~','~~')"><s>S</s></button>
@@ -2051,11 +2052,12 @@
 
           <!-- Area de edicao e preview -->
           <div class="md-editor-area">
-            <textarea id="taskDesc"
+            <textarea id="taskDesc" style="display:none"
               placeholder="Descreva a tarefa com formatação Markdown...&#10;&#10;**negrito**  *itálico*  `código`&#10;- item de lista&#10;> citação&#10;&#10;## Seção&#10;texto da seção"></textarea>
-            <div class="md-preview-pane md-rendered" id="mdPreviewPane"></div>
+            <div class="md-preview-pane md-rendered active" id="mdPreviewPane"></div>
           </div>
-          <div class="md-hint">Ctrl+B negrito &nbsp;&#183;&nbsp; Ctrl+I itálico &nbsp;&#183;&nbsp; Ctrl+K link
+          <div class="md-hint" style="display:none">Ctrl+B negrito &nbsp;&#183;&nbsp; Ctrl+I itálico &nbsp;&#183;&nbsp;
+            Ctrl+K link
             &nbsp;&#183;&nbsp; Tab = 2 espaços</div>
         </div>
 
@@ -2315,7 +2317,7 @@
           mutations.forEach(function (m) {
             if (m.attributeName === 'class' && taskModalEl.classList.contains('show')) {
               // Pequeno delay para garantir que o modal ja foi preenchido pelo app.js
-              setTimeout(function () { switchMdTab('edit'); }, 0);
+              setTimeout(function () { switchMdTab('preview'); }, 0);
             }
           });
         }).observe(taskModalEl, { attributes: true });
