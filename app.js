@@ -11,6 +11,44 @@ const GANTT_DAYS = 28;
 const DB_NAME = 'taskflow_db';
 const DB_STORE = 'sqlitedb';
 
+// ─── TIMEZONE UTILITIES (GMT-3 / São Paulo) ───
+const TZ_OFFSET_MS = -3 * 60 * 60 * 1000; // GMT-3 em milissegundos
+
+/**
+ * Retorna a data de hoje no formato YYYY-MM-DD em GMT-3,
+ * independente do fuso do sistema operacional.
+ */
+function todayStrGMT3() {
+    const d = new Date(Date.now() + TZ_OFFSET_MS);
+    return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Retorna um timestamp ISO 8601 com offset explícito GMT-3
+ * (ex: "2025-06-10T14:32:00.000-03:00").
+ * Use no lugar de new Date().toISOString() para createdAt / modifiedAt.
+ */
+function nowISOGMT3() {
+    const local = new Date(Date.now() + TZ_OFFSET_MS);
+    return local.toISOString().slice(0, -1) + '-03:00';
+}
+
+/**
+ * Converte uma string YYYY-MM-DD em objeto Date interpretado como
+ * meia-noite GMT-3, em vez de meia-noite UTC (comportamento padrão
+ * de new Date('YYYY-MM-DD') que causa bug no Windows).
+ */
+function dateFromStrGMT3(dateStr) {
+    return new Date(dateStr + 'T00:00:00-03:00');
+}
+
+/**
+ * Retorna um objeto Date representando meia-noite de hoje em GMT-3.
+ */
+function todayGMT3() {
+    return dateFromStrGMT3(todayStrGMT3());
+}
+
 // ─── SHA-256 HASH ───
 async function hashPassword(pw) {
     const buf = new TextEncoder().encode(pw);
@@ -92,7 +130,6 @@ async function initDatabase() {
         if (old) {
             const oldTasks = JSON.parse(old);
             if (Array.isArray(oldTasks) && oldTasks.length > 0) {
-                // Store for migration after first user registers
                 window._migrationTasks = oldTasks;
             }
         }
@@ -127,7 +164,7 @@ async function doRegister() {
     if (window._migrationTasks && window._migrationTasks.length > 0) {
         for (const t of window._migrationTasks) {
             const id = t.id || genId();
-            const now = new Date().toISOString();
+            const now = nowISOGMT3(); // ← GMT-3
             db.run("INSERT OR IGNORE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 [id, currentUser.id, t.title || '', t.description || '', t.status || 'To Do', t.startDate || '', t.endDate || '', now, now]);
         }
@@ -165,7 +202,6 @@ function doLogout() {
     closeUserDropdown();
     document.getElementById('appContainer').style.display = 'none';
     document.getElementById('authScreen').style.display = 'flex';
-    // Clear form fields
     document.getElementById('loginEmail').value = '';
     document.getElementById('loginPassword').value = '';
 }
@@ -214,7 +250,6 @@ async function saveProfile() {
 
     if (!name || !email) { errEl.textContent = 'Nome e e-mail são obrigatórios.'; errEl.classList.add('show'); return; }
 
-    // Check email uniqueness (excluding current user)
     const dup = db.exec("SELECT id FROM users WHERE email = ? AND id != ?", [email, currentUser.id]);
     if (dup.length > 0 && dup[0].values.length > 0) {
         errEl.textContent = 'Este e-mail já está em uso.'; errEl.classList.add('show'); return;
@@ -249,7 +284,6 @@ async function showApp() {
     document.getElementById('appContainer').style.display = 'block';
     updateUserUI();
     loadTasksFromDB();
-    // Remove automaticamente tarefas Completed com término > 30 dias
     await purgeOldCompletedTasksSilent();
     ganttStartDate = getGanttDefaultStart();
     render();
@@ -258,7 +292,7 @@ async function showApp() {
 // ─── TASK DB OPERATIONS ───
 function loadTasksFromDB() {
     tasks = [];
-    const now = new Date().toISOString();
+    const now = nowISOGMT3(); // ← GMT-3
     const res = db.exec("SELECT id, title, description, status, start_date, end_date, created_at, modified_at FROM tasks WHERE user_id = ?", [currentUser.id]);
     if (res.length > 0) {
         for (const row of res[0].values) {
@@ -304,14 +338,21 @@ function render() {
 }
 
 function autoUpdateStatuses() {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = todayGMT3(); // ← GMT-3: meia-noite correta independente do OS
     let changed = false;
     tasks.forEach(t => {
         if (t.status === 'Completed') return;
-        const endDate = new Date(t.endDate + 'T00:00:00');
-        const startDate = new Date(t.startDate + 'T00:00:00');
-        if (today > endDate && t.status !== 'Overdue') { t.status = 'Overdue'; t.modifiedAt = new Date().toISOString(); changed = true; }
-        else if (t.status === 'To Do' && today >= startDate && today <= endDate) { t.status = 'In Progress'; t.modifiedAt = new Date().toISOString(); changed = true; }
+        const endDate = dateFromStrGMT3(t.endDate);   // ← GMT-3
+        const startDate = dateFromStrGMT3(t.startDate); // ← GMT-3
+        if (today > endDate && t.status !== 'Overdue') {
+            t.status = 'Overdue';
+            t.modifiedAt = nowISOGMT3(); // ← GMT-3
+            changed = true;
+        } else if (t.status === 'To Do' && today >= startDate && today <= endDate) {
+            t.status = 'In Progress';
+            t.modifiedAt = nowISOGMT3(); // ← GMT-3
+            changed = true;
+        }
     });
     if (changed) saveToStorage();
 }
@@ -353,7 +394,12 @@ function renderTable() {
 }
 
 // ─── GANTT ───
-function getGanttDefaultStart() { const d = new Date(); d.setDate(d.getDate() - 7); d.setHours(0, 0, 0, 0); return d; }
+function getGanttDefaultStart() {
+    // Parte de "hoje GMT-3" e recua 7 dias
+    const d = todayGMT3(); // ← GMT-3
+    d.setDate(d.getDate() - 7);
+    return d;
+}
 function ganttPrev() { ganttStartDate.setDate(ganttStartDate.getDate() - 7); renderGantt(); }
 function ganttNext() { ganttStartDate.setDate(ganttStartDate.getDate() + 7); renderGantt(); }
 function ganttToday() { ganttStartDate = getGanttDefaultStart(); renderGantt(); }
@@ -362,7 +408,7 @@ function renderGantt() {
     if (!ganttStartDate) ganttStartDate = getGanttDefaultStart();
     const filtered = getFilteredTasks();
     const container = document.getElementById('ganttContent');
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = todayGMT3(); // ← GMT-3
     const days = [];
     for (let i = 0; i < GANTT_DAYS; i++) { const d = new Date(ganttStartDate); d.setDate(d.getDate() + i); days.push(d); }
     const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -381,7 +427,8 @@ function renderGantt() {
     } else {
         filtered.forEach(t => {
             const sk = statusKey(t.status);
-            const tStart = new Date(t.startDate + 'T00:00:00'), tEnd = new Date(t.endDate + 'T00:00:00');
+            const tStart = dateFromStrGMT3(t.startDate); // ← GMT-3
+            const tEnd = dateFromStrGMT3(t.endDate);     // ← GMT-3
             const ganttStart = ganttStartDate.getTime();
             const dayWidth = 100 / GANTT_DAYS;
             const startOffset = (tStart.getTime() - ganttStart) / (1000 * 60 * 60 * 24);
@@ -427,7 +474,12 @@ function positionTooltip(e) { const tt = document.getElementById('ganttTooltip')
 const dragState = { active: false, type: null, taskId: null, startX: 0, origStartDate: null, origEndDate: null, timelineEl: null, pxPerDay: 0, barEl: null };
 function getTimelineMetrics(barEl) { const tl = barEl.closest('.gantt-row-timeline'); if (!tl) return null; const r = tl.getBoundingClientRect(); return { timeline: tl, rect: r, pxPerDay: r.width / GANTT_DAYS }; }
 function pxToDateOffset(px) { return Math.round(px / dragState.pxPerDay); }
-function addDaysToDateStr(ds, days) { const d = new Date(ds + 'T00:00:00'); d.setDate(d.getDate() + days); return d.toISOString().split('T')[0]; }
+function addDaysToDateStr(ds, days) {
+    // Usa dateFromStrGMT3 para evitar o bug de virada de dia no Windows
+    const d = dateFromStrGMT3(ds); // ← GMT-3
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+}
 function updateDragIndicator(e, ds) { const ind = document.getElementById('dragDateIndicator'); ind.textContent = formatDate(ds); ind.style.left = (e.clientX + 14) + 'px'; ind.style.top = (e.clientY - 32) + 'px'; ind.classList.add('show'); }
 function hideDragIndicator() { document.getElementById('dragDateIndicator').classList.remove('show'); }
 
@@ -457,7 +509,8 @@ document.addEventListener('mousemove', e => {
     if (dragState.type === 'left') { let ns = addDaysToDateStr(dragState.origStartDate, daysDelta); if (ns > dragState.origEndDate) ns = dragState.origEndDate; task.startDate = ns; updateDragIndicator(e, ns); }
     else if (dragState.type === 'right') { let ne = addDaysToDateStr(dragState.origEndDate, daysDelta); if (ne < dragState.origStartDate) ne = dragState.origStartDate; task.endDate = ne; updateDragIndicator(e, ne); }
     else { const ns = addDaysToDateStr(dragState.origStartDate, daysDelta), ne = addDaysToDateStr(dragState.origEndDate, daysDelta); task.startDate = ns; task.endDate = ne; const ind = document.getElementById('dragDateIndicator'); ind.textContent = `${formatDate(ns)} → ${formatDate(ne)}`; ind.style.left = (e.clientX + 14) + 'px'; ind.style.top = (e.clientY - 32) + 'px'; ind.classList.add('show'); }
-    const tS = new Date(task.startDate + 'T00:00:00'), tE = new Date(task.endDate + 'T00:00:00');
+    const tS = dateFromStrGMT3(task.startDate); // ← GMT-3
+    const tE = dateFromStrGMT3(task.endDate);   // ← GMT-3
     const so = (tS.getTime() - ganttStartDate.getTime()) / (1000 * 60 * 60 * 24), dur = (tE.getTime() - tS.getTime()) / (1000 * 60 * 60 * 24) + 1;
     const bL = so * dayWidth, bW = dur * dayWidth, cL = Math.max(bL, 0), cR = Math.min(bL + bW, 100), cW = Math.max(cR - cL, dayWidth * 0.5);
     dragState.barEl.style.left = cL + '%'; dragState.barEl.style.width = cW + '%';
@@ -470,7 +523,8 @@ document.addEventListener('mouseup', e => {
     document.body.style.cursor = ''; document.body.style.userSelect = ''; hideDragIndicator();
     const dx = Math.abs(e.clientX - dragState.startX);
     if (dx < 3 && dragState.type === 'move') { const task = tasks.find(t => t.id === dragState.taskId); if (task) { task.startDate = dragState.origStartDate; task.endDate = dragState.origEndDate; } dragState.active = false; editTask(dragState.taskId); return; }
-    const draggedTask = tasks.find(t => t.id === dragState.taskId); if (draggedTask) draggedTask.modifiedAt = new Date().toISOString();
+    const draggedTask = tasks.find(t => t.id === dragState.taskId);
+    if (draggedTask) draggedTask.modifiedAt = nowISOGMT3(); // ← GMT-3
     saveToStorage(); dragState.active = false; render();
 });
 
@@ -505,7 +559,9 @@ function openModal(taskId) {
     } else {
         document.getElementById('modalTitle').textContent = 'Nova Tarefa'; document.getElementById('saveBtn').textContent = 'Criar Tarefa';
         document.getElementById('taskTitle').value = ''; document.getElementById('taskDesc').value = ''; document.getElementById('taskStatus').value = 'To Do';
-        const td = new Date().toISOString().split('T')[0]; document.getElementById('taskStart').value = td; document.getElementById('taskEnd').value = td;
+        const td = todayStrGMT3(); // ← GMT-3
+        document.getElementById('taskStart').value = td;
+        document.getElementById('taskEnd').value = td;
     }
     setTimeout(() => document.getElementById('taskTitle').focus(), 100);
 }
@@ -516,8 +572,15 @@ function saveTask() {
     const status = document.getElementById('taskStatus').value, startDate = document.getElementById('taskStart').value, endDate = document.getElementById('taskEnd').value;
     if (!title) { document.getElementById('taskTitle').focus(); return; } if (!startDate || !endDate) return;
     if (endDate < startDate) { alert('A data de término deve ser igual ou posterior à data de início.'); return; }
-    if (editingId) { const t = tasks.find(tk => tk.id === editingId); t.title = title; t.description = desc; t.status = status; t.startDate = startDate; t.endDate = endDate; t.modifiedAt = new Date().toISOString(); }
-    else { const now = new Date().toISOString(); tasks.push({ id: genId(), title, description: desc, status, startDate, endDate, createdAt: now, modifiedAt: now }); }
+    if (editingId) {
+        const t = tasks.find(tk => tk.id === editingId);
+        t.title = title; t.description = desc; t.status = status;
+        t.startDate = startDate; t.endDate = endDate;
+        t.modifiedAt = nowISOGMT3(); // ← GMT-3
+    } else {
+        const now = nowISOGMT3(); // ← GMT-3
+        tasks.push({ id: genId(), title, description: desc, status, startDate, endDate, createdAt: now, modifiedAt: now });
+    }
     saveToStorage(); closeModal(); render();
 }
 function editTask(id) { openModal(id); }
@@ -525,7 +588,13 @@ function deleteTask(id) { if (!confirm('Tem certeza que deseja excluir esta tare
 
 // ─── STATUS DROPDOWN ───
 function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
-function changeStatus(ns) { if (statusChangeId) { const t = tasks.find(tk => tk.id === statusChangeId); if (t) { t.status = ns; t.modifiedAt = new Date().toISOString(); saveToStorage(); render(); } } document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null; }
+function changeStatus(ns) {
+    if (statusChangeId) {
+        const t = tasks.find(tk => tk.id === statusChangeId);
+        if (t) { t.status = ns; t.modifiedAt = nowISOGMT3(); saveToStorage(); render(); } // ← GMT-3
+    }
+    document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null;
+}
 document.addEventListener('click', () => { document.getElementById('statusDropdown').classList.remove('show'); closeUserDropdown(); });
 
 // ─── SYNC MODAL ───
@@ -539,13 +608,13 @@ function showSyncStatus(id, msg, type) { const el = document.getElementById(id);
 function hideSyncStatus(id) { document.getElementById(id).className = 'sync-status'; }
 function generateSyncExport() { const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt })); const text = JSON.stringify(exportData, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
 function copySyncExport() { const ta = document.getElementById('syncExportText'); if (!ta.value) generateSyncExport(); navigator.clipboard.writeText(ta.value).then(() => { showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }).catch(() => { ta.select(); document.execCommand('copy'); showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }); }
-function downloadSyncExport() { if (!document.getElementById('syncExportText').value) generateSyncExport(); const text = document.getElementById('syncExportText').value; const blob = new Blob([text], { type: 'application/json;charset=utf-8;' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `taskflow_${new Date().toISOString().split('T')[0]}.json`; a.click(); URL.revokeObjectURL(url); showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success'); }
+function downloadSyncExport() { if (!document.getElementById('syncExportText').value) generateSyncExport(); const text = document.getElementById('syncExportText').value; const blob = new Blob([text], { type: 'application/json;charset=utf-8;' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `taskflow_${todayStrGMT3()}.json`; a.click(); URL.revokeObjectURL(url); showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success'); }
 
 function parseImportedJSON(text) {
     const parsed = JSON.parse(text); if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array.');
     const vs = ['Completed', 'In Progress', 'To Do', 'Overdue'];
-    const now = new Date().toISOString();
-    return parsed.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || new Date().toISOString().split('T')[0], endDate: t.endDate || new Date().toISOString().split('T')[0], createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
+    const now = nowISOGMT3(); // ← GMT-3
+    return parsed.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
 }
 function mergeTaskLists(incoming) {
     let added = 0, updated = 0;
@@ -554,8 +623,8 @@ function mergeTaskLists(incoming) {
         const key = inc.title.toLowerCase();
         if (byTitle.has(key)) {
             const ex = byTitle.get(key);
-            const exMod = ex.modifiedAt || '1970-01-01T00:00:00.000Z';
-            const incMod = inc.modifiedAt || '1970-01-01T00:00:00.000Z';
+            const exMod = ex.modifiedAt || '1970-01-01T00:00:00.000-03:00';
+            const incMod = inc.modifiedAt || '1970-01-01T00:00:00.000-03:00';
             if (incMod > exMod) {
                 ex.status = inc.status; ex.startDate = inc.startDate; ex.endDate = inc.endDate;
                 ex.description = inc.description || ex.description;
@@ -576,7 +645,7 @@ function executeSyncImport() {
         const incoming = parseImportedJSON(text); if (incoming.length === 0) throw new Error('Nenhuma tarefa válida.');
         if (syncImportMode === 'replace') {
             db.run("DELETE FROM tasks WHERE user_id = ?", [currentUser.id]);
-            const now = new Date().toISOString();
+            const now = nowISOGMT3(); // ← GMT-3
             tasks = incoming.map(t => ({ ...t, id: genId(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now }));
             saveToStorage(); render();
             showSyncStatus('syncImportStatus', `✓ ${tasks.length} tarefa(s) importada(s) (substituição).`, 'success');
@@ -611,10 +680,6 @@ function esc(str) { const div = document.createElement('div'); div.textContent =
 
 // ─── PURGE OLD COMPLETED TASKS ───
 
-/**
- * Exibe um toast de feedback na tela (canto inferior direito).
- * Cria o elemento se ainda não existir no DOM.
- */
 function showPurgeToast(msg, type) {
     let toast = document.getElementById('purgeToast');
     if (!toast) {
@@ -629,23 +694,14 @@ function showPurgeToast(msg, type) {
     toast._timer = setTimeout(() => toast.classList.remove('show'), 3500);
 }
 
-/**
- * Remove do banco as tarefas com status 'Completed' cuja end_date
- * seja anterior a 30 dias em relação à data atual.
- *
- * @param {boolean} showConfirm  true → pede confirmação e exibe toast;
- *                               false → execução silenciosa (automática no login)
- * @returns {number} Quantidade de registros removidos
- */
 async function purgeOldCompletedTasks(showConfirm = true) {
     if (!db || !currentUser) return 0;
 
-    // Calcula data-limite: hoje - 30 dias  (formato YYYY-MM-DD)
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 30);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    // Calcula data-limite em GMT-3: hoje - 30 dias
+    const cutoffDate = new Date(Date.now() + TZ_OFFSET_MS);
+    cutoffDate.setDate(cutoffDate.getDate() - 30);
+    const cutoffStr = cutoffDate.toISOString().slice(0, 10); // ← GMT-3
 
-    // Conta quantas tarefas serão afetadas antes de remover
     const countRes = db.exec(
         "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?",
         [currentUser.id, cutoffStr]
@@ -670,14 +726,12 @@ async function purgeOldCompletedTasks(showConfirm = true) {
 
     if (count === 0) return 0;
 
-    // Executa a exclusão no SQLite
     db.run(
         "DELETE FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?",
         [currentUser.id, cutoffStr]
     );
     await saveDBToIDB();
 
-    // Atualiza o array em memória e re-renderiza
     tasks = tasks.filter(t => !(t.status === 'Completed' && t.endDate <= cutoffStr));
     render();
 
@@ -688,7 +742,6 @@ async function purgeOldCompletedTasks(showConfirm = true) {
     return count;
 }
 
-/** Versão silenciosa — chamada automaticamente no login/restauração de sessão */
 async function purgeOldCompletedTasksSilent() {
     return purgeOldCompletedTasks(false);
 }
@@ -699,12 +752,10 @@ async function purgeOldCompletedTasksSilent() {
         await initDatabase();
         document.getElementById('loadingScreen').style.display = 'none';
 
-        // Check session
         const saved = sessionStorage.getItem('taskflow_user');
         if (saved) {
             try {
                 currentUser = JSON.parse(saved);
-                // Verify user still exists
                 const res = db.exec("SELECT id, name, email FROM users WHERE id = ?", [currentUser.id]);
                 if (res.length > 0 && res[0].values.length > 0) {
                     currentUser = { id: res[0].values[0][0], name: res[0].values[0][1], email: res[0].values[0][2] };
@@ -714,7 +765,6 @@ async function purgeOldCompletedTasksSilent() {
             } catch (e) { }
         }
 
-        // Show auth screen
         document.getElementById('authScreen').style.display = 'flex';
     } catch (err) {
         document.getElementById('loadingScreen').innerHTML = `<div style="color:var(--overdue)">Erro ao carregar banco de dados:<br>${err.message}</div>`;
