@@ -244,11 +244,13 @@ function updateUserUI() {
 }
 
 // ─── SHOW APP ───
-function showApp() {
+async function showApp() {
     document.getElementById('authScreen').style.display = 'none';
     document.getElementById('appContainer').style.display = 'block';
     updateUserUI();
     loadTasksFromDB();
+    // Remove automaticamente tarefas Completed com término > 30 dias
+    await purgeOldCompletedTasksSilent();
     ganttStartDate = getGanttDefaultStart();
     render();
 }
@@ -606,6 +608,90 @@ document.addEventListener('keydown', e => {
 
 // ─── UTILS ───
 function esc(str) { const div = document.createElement('div'); div.textContent = str || ''; return div.innerHTML; }
+
+// ─── PURGE OLD COMPLETED TASKS ───
+
+/**
+ * Exibe um toast de feedback na tela (canto inferior direito).
+ * Cria o elemento se ainda não existir no DOM.
+ */
+function showPurgeToast(msg, type) {
+    let toast = document.getElementById('purgeToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'purgeToast';
+        toast.className = 'purge-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.className = 'purge-toast ' + (type || 'info') + ' show';
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.remove('show'), 3500);
+}
+
+/**
+ * Remove do banco as tarefas com status 'Completed' cuja end_date
+ * seja anterior a 30 dias em relação à data atual.
+ *
+ * @param {boolean} showConfirm  true → pede confirmação e exibe toast;
+ *                               false → execução silenciosa (automática no login)
+ * @returns {number} Quantidade de registros removidos
+ */
+async function purgeOldCompletedTasks(showConfirm = true) {
+    if (!db || !currentUser) return 0;
+
+    // Calcula data-limite: hoje - 30 dias  (formato YYYY-MM-DD)
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    // Conta quantas tarefas serão afetadas antes de remover
+    const countRes = db.exec(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?",
+        [currentUser.id, cutoffStr]
+    );
+    const count = (countRes.length && countRes[0].values.length)
+        ? countRes[0].values[0][0]
+        : 0;
+
+    if (showConfirm) {
+        if (count === 0) {
+            showPurgeToast('✅ Nenhuma tarefa elegível para remoção.', 'info');
+            return 0;
+        }
+        const plural = count === 1 ? 'tarefa' : 'tarefas';
+        const ok = window.confirm(
+            `Remover ${count} ${plural} com status Completed\n` +
+            `cujo término foi há mais de 30 dias?\n\n` +
+            `(referência: ${cutoffStr})\n\nEsta ação não pode ser desfeita.`
+        );
+        if (!ok) return 0;
+    }
+
+    if (count === 0) return 0;
+
+    // Executa a exclusão no SQLite
+    db.run(
+        "DELETE FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?",
+        [currentUser.id, cutoffStr]
+    );
+    await saveDBToIDB();
+
+    // Atualiza o array em memória e re-renderiza
+    tasks = tasks.filter(t => !(t.status === 'Completed' && t.endDate <= cutoffStr));
+    render();
+
+    if (showConfirm) {
+        const plural2 = count === 1 ? 'tarefa removida' : 'tarefas removidas';
+        showPurgeToast(`🗑️ ${count} ${plural2} com sucesso.`, 'success');
+    }
+    return count;
+}
+
+/** Versão silenciosa — chamada automaticamente no login/restauração de sessão */
+async function purgeOldCompletedTasksSilent() {
+    return purgeOldCompletedTasks(false);
+}
 
 // ─── STARTUP ───
 (async function () {
