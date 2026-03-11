@@ -107,6 +107,14 @@ async function initDatabase() {
     modified_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
+    db.run(`CREATE TABLE IF NOT EXISTS gist_config (
+    user_id INTEGER PRIMARY KEY,
+    gist_token TEXT NOT NULL,
+    gist_id TEXT NOT NULL,
+    auto_sync INTEGER DEFAULT 0,
+    last_sync TEXT DEFAULT '',
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
     // Migrate: add created_at and modified_at columns if missing (old DBs)
     try {
         const cols = db.exec("PRAGMA table_info(tasks)");
@@ -326,7 +334,12 @@ async function saveAllTasksToDB() {
 }
 
 // ─── COMPATIBILITY WRAPPERS ───
-function saveToStorage() { saveAllTasksToDB(); }
+function saveToStorage() {
+    saveAllTasksToDB();
+    // Auto-sync para Gist se habilitado (debounced)
+    clearTimeout(saveToStorage._gistTimer);
+    saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 2000);
+}
 
 function genId() { return 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5); }
 
@@ -599,9 +612,22 @@ document.addEventListener('click', () => { document.getElementById('statusDropdo
 
 // ─── SYNC MODAL ───
 let syncImportMode = 'merge';
-function openSyncModal(tab) { document.getElementById('syncModal').classList.add('show'); switchSyncTab(tab || 'export'); if (tab === 'export') generateSyncExport(); }
-function closeSyncModal() { document.getElementById('syncModal').classList.remove('show'); document.getElementById('syncExportText').value = ''; document.getElementById('syncImportText').value = ''; hideSyncStatus('syncExportStatus'); hideSyncStatus('syncImportStatus'); }
-function switchSyncTab(tab) { ['export', 'import'].forEach(t => { document.getElementById('syncTab' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab); document.getElementById('syncPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab); }); document.getElementById('syncImportBtn').style.display = (tab === 'import') ? '' : 'none'; }
+function openSyncModal(tab) {
+    document.getElementById('syncModal').classList.add('show');
+    switchSyncTab(tab || 'gist');
+    if (tab === 'export') generateSyncExport();
+    if (tab === 'gist') refreshGistUI();
+}
+function closeSyncModal() { document.getElementById('syncModal').classList.remove('show'); document.getElementById('syncExportText').value = ''; document.getElementById('syncImportText').value = ''; hideSyncStatus('syncExportStatus'); hideSyncStatus('syncImportStatus'); hideSyncStatus('gistSyncStatus'); }
+function switchSyncTab(tab) {
+    ['gist', 'export', 'import'].forEach(t => {
+        const tabBtn = document.getElementById('syncTab' + t.charAt(0).toUpperCase() + t.slice(1));
+        const panel = document.getElementById('syncPanel' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (tabBtn) tabBtn.classList.toggle('active', t === tab);
+        if (panel) panel.classList.toggle('active', t === tab);
+    });
+    document.getElementById('syncImportBtn').style.display = (tab === 'import') ? '' : 'none';
+}
 function setImportMode(m) { syncImportMode = m; document.getElementById('importModeMerge').classList.toggle('active', m === 'merge'); document.getElementById('importModeReplace').classList.toggle('active', m === 'replace'); }
 function triggerFileImport() { document.getElementById('csvInput').click(); }
 function showSyncStatus(id, msg, type) { const el = document.getElementById(id); el.textContent = msg; el.className = 'sync-status ' + type; }
@@ -663,6 +689,351 @@ function importFileJSON(event) {
     const reader = new FileReader();
     reader.onload = function (e) { document.getElementById('syncImportText').value = e.target.result; hideSyncStatus('syncImportStatus'); if (document.getElementById('syncModal').classList.contains('show')) { switchSyncTab('import'); } else { openSyncModal('import'); } showSyncStatus('syncImportStatus', `Arquivo "${file.name}" carregado.`, 'info'); };
     reader.readAsText(file); event.target.value = '';
+}
+
+// ─── GIST SYNC ───
+
+/** Carrega configuração do Gist do SQLite para o usuário atual */
+function loadGistConfig() {
+    if (!db || !currentUser) return null;
+    const res = db.exec("SELECT gist_token, gist_id, auto_sync, last_sync FROM gist_config WHERE user_id = ?", [currentUser.id]);
+    if (res.length > 0 && res[0].values.length > 0) {
+        const r = res[0].values[0];
+        return { token: r[0], gistId: r[1], autoSync: !!r[2], lastSync: r[3] || '' };
+    }
+    return null;
+}
+
+/** Extrai o Gist ID de uma URL ou retorna o ID diretamente */
+function extractGistId(input) {
+    if (!input) return '';
+    input = input.trim();
+    // URL completa: https://gist.github.com/user/abc123 ou https://gist.github.com/abc123
+    const urlMatch = input.match(/gist\.github\.com\/(?:[^/]+\/)?([a-f0-9]+)/i);
+    if (urlMatch) return urlMatch[1];
+    // Se parece com um hash hexadecimal, é o ID direto
+    if (/^[a-f0-9]+$/i.test(input)) return input;
+    return input;
+}
+
+/** Salva a configuração do Gist no SQLite */
+async function saveGistConfig() {
+    if (!db || !currentUser) return;
+    const token = document.getElementById('gistToken').value.trim();
+    const rawUrl = document.getElementById('gistUrl').value.trim();
+    const gistId = extractGistId(rawUrl);
+
+    if (!token) {
+        showSyncStatus('gistSyncStatus', 'Informe o GitHub Personal Access Token.', 'error');
+        return;
+    }
+    if (!gistId) {
+        showSyncStatus('gistSyncStatus', 'Informe o ID ou URL do Gist.', 'error');
+        return;
+    }
+
+    db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, COALESCE((SELECT auto_sync FROM gist_config WHERE user_id = ?), 0), COALESCE((SELECT last_sync FROM gist_config WHERE user_id = ?), ''))",
+        [currentUser.id, token, gistId, currentUser.id, currentUser.id]);
+    await saveDBToIDB();
+
+    showSyncStatus('gistSyncStatus', '✓ Configuração salva com sucesso.', 'success');
+    refreshGistUI();
+}
+
+/** Cria um novo Gist e salva a configuração */
+async function createNewGist() {
+    const token = document.getElementById('gistToken').value.trim();
+    if (!token) {
+        showSyncStatus('gistSyncStatus', 'Informe o token antes de criar um novo Gist.', 'error');
+        return;
+    }
+
+    showSyncStatus('gistSyncStatus', 'Criando Gist...', 'info');
+
+    try {
+        const exportData = tasks.map(t => ({
+            id: t.id, title: t.title, description: t.description, status: t.status,
+            startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt
+        }));
+
+        const resp = await fetch('https://api.github.com/gists', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                description: 'TaskFlow Sync — ' + (currentUser.name || 'User'),
+                public: false,
+                files: {
+                    'taskflow.json': { content: JSON.stringify(exportData, null, 2) }
+                }
+            })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.message || 'HTTP ' + resp.status);
+        }
+
+        const data = await resp.json();
+        const gistId = data.id;
+
+        // Save config
+        db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, 0, ?)",
+            [currentUser.id, token, gistId, nowISOGMT3()]);
+        await saveDBToIDB();
+
+        document.getElementById('gistUrl').value = gistId;
+        showSyncStatus('gistSyncStatus', `✓ Gist criado! ID: ${gistId}`, 'success');
+        refreshGistUI();
+    } catch (err) {
+        showSyncStatus('gistSyncStatus', '✗ Erro ao criar Gist: ' + err.message, 'error');
+    }
+}
+
+/** Testa a conexão com o Gist configurado */
+async function testGistConnection() {
+    const token = document.getElementById('gistToken').value.trim();
+    const rawUrl = document.getElementById('gistUrl').value.trim();
+    const gistId = extractGistId(rawUrl);
+
+    if (!token || !gistId) {
+        showSyncStatus('gistSyncStatus', 'Preencha token e ID/URL do Gist.', 'error');
+        return;
+    }
+
+    showSyncStatus('gistSyncStatus', 'Testando conexão...', 'info');
+
+    try {
+        const resp = await fetch('https://api.github.com/gists/' + gistId, {
+            headers: {
+                'Authorization': 'Bearer ' + token,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.message || 'HTTP ' + resp.status);
+        }
+
+        const data = await resp.json();
+        const hasFile = data.files && data.files['taskflow.json'];
+        const owner = data.owner ? data.owner.login : 'desconhecido';
+
+        if (hasFile) {
+            showSyncStatus('gistSyncStatus', `✓ Conexão OK! Gist de @${owner}, arquivo taskflow.json encontrado.`, 'success');
+        } else {
+            showSyncStatus('gistSyncStatus', `⚠ Gist de @${owner} encontrado, mas sem arquivo taskflow.json. Será criado no primeiro push.`, 'info');
+        }
+    } catch (err) {
+        showSyncStatus('gistSyncStatus', '✗ Falha na conexão: ' + err.message, 'error');
+    }
+}
+
+/** Envia tarefas para o Gist (push) */
+async function pushToGist() {
+    const cfg = loadGistConfig();
+    if (!cfg) {
+        showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error');
+        return;
+    }
+
+    showSyncStatus('gistSyncStatus', 'Enviando para Gist...', 'info');
+
+    try {
+        const exportData = tasks.map(t => ({
+            id: t.id, title: t.title, description: t.description, status: t.status,
+            startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt
+        }));
+
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': 'Bearer ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                files: {
+                    'taskflow.json': { content: JSON.stringify(exportData, null, 2) }
+                }
+            })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.message || 'HTTP ' + resp.status);
+        }
+
+        const syncTime = nowISOGMT3();
+        db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
+        await saveDBToIDB();
+
+        showSyncStatus('gistSyncStatus', `✓ ${exportData.length} tarefa(s) enviada(s) ao Gist.`, 'success');
+        refreshGistUI();
+    } catch (err) {
+        showSyncStatus('gistSyncStatus', '✗ Erro ao enviar: ' + err.message, 'error');
+    }
+}
+
+/** Baixa tarefas do Gist e faz merge (pull) */
+async function pullFromGist() {
+    const cfg = loadGistConfig();
+    if (!cfg) {
+        showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error');
+        return;
+    }
+
+    showSyncStatus('gistSyncStatus', 'Baixando do Gist...', 'info');
+
+    try {
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            headers: {
+                'Authorization': 'Bearer ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.message || 'HTTP ' + resp.status);
+        }
+
+        const data = await resp.json();
+        if (!data.files || !data.files['taskflow.json']) {
+            showSyncStatus('gistSyncStatus', '⚠ Arquivo taskflow.json não encontrado no Gist.', 'info');
+            return;
+        }
+
+        const content = data.files['taskflow.json'].content;
+        const incoming = parseImportedJSON(content);
+
+        if (incoming.length === 0) {
+            showSyncStatus('gistSyncStatus', '⚠ Nenhuma tarefa válida no Gist.', 'info');
+            return;
+        }
+
+        const { added, updated } = mergeTaskLists(incoming);
+        saveToStorage();
+        render();
+
+        const syncTime = nowISOGMT3();
+        db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
+        await saveDBToIDB();
+
+        const parts = [];
+        if (added) parts.push(`${added} adicionada(s)`);
+        if (updated) parts.push(`${updated} atualizada(s)`);
+        const unch = incoming.length - added - updated;
+        if (unch) parts.push(`${unch} sem alteração`);
+
+        showSyncStatus('gistSyncStatus', `✓ Mesclagem do Gist: ${parts.join(', ')}.`, 'success');
+        refreshGistUI();
+    } catch (err) {
+        showSyncStatus('gistSyncStatus', '✗ Erro ao baixar: ' + err.message, 'error');
+    }
+}
+
+/** Push silencioso para auto-sync */
+async function silentPushToGist() {
+    const cfg = loadGistConfig();
+    if (!cfg || !cfg.autoSync) return;
+
+    try {
+        const exportData = tasks.map(t => ({
+            id: t.id, title: t.title, description: t.description, status: t.status,
+            startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt
+        }));
+
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': 'Bearer ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                files: {
+                    'taskflow.json': { content: JSON.stringify(exportData, null, 2) }
+                }
+            })
+        });
+
+        if (resp.ok) {
+            const syncTime = nowISOGMT3();
+            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
+            await saveDBToIDB();
+        }
+    } catch (err) {
+        console.warn('Auto-sync failed:', err.message);
+    }
+}
+
+/** Liga/desliga auto-sync */
+async function toggleAutoSync(checked) {
+    if (!db || !currentUser) return;
+    db.run("UPDATE gist_config SET auto_sync = ? WHERE user_id = ?", [checked ? 1 : 0, currentUser.id]);
+    await saveDBToIDB();
+}
+
+/** Remove configuração do Gist */
+async function clearGistConfig() {
+    if (!confirm('Remover a configuração do Gist deste dispositivo?\n\n(O Gist no GitHub permanece intacto.)')) return;
+    db.run("DELETE FROM gist_config WHERE user_id = ?", [currentUser.id]);
+    await saveDBToIDB();
+    showSyncStatus('gistSyncStatus', '✓ Configuração removida.', 'success');
+    refreshGistUI();
+}
+
+/** Atualiza a interface do painel Gist */
+function refreshGistUI() {
+    const cfg = loadGistConfig();
+    const badge = document.getElementById('gistStatusBadge');
+    const configSection = document.getElementById('gistConfigSection');
+    const syncSection = document.getElementById('gistSyncSection');
+    const infoEl = document.getElementById('gistSyncInfo');
+
+    if (cfg && cfg.token && cfg.gistId) {
+        badge.innerHTML = '<span class="gist-connected">&#9679; Gist Conectado</span>';
+        configSection.style.display = 'none';
+        syncSection.style.display = 'block';
+
+        // Auto-sync checkbox
+        document.getElementById('autoSyncCheck').checked = cfg.autoSync;
+
+        // Info panel
+        let info = `<strong>Gist ID:</strong> <span class="last-sync">${cfg.gistId}</span>`;
+        if (cfg.lastSync) {
+            const d = new Date(cfg.lastSync);
+            const dateStr = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR');
+            info += `<br><strong>Última sincronização:</strong> <span class="last-sync">${dateStr}</span>`;
+        } else {
+            info += `<br><strong>Última sincronização:</strong> <em style="color:var(--text-dim)">nunca</em>`;
+        }
+        info += `<br><br><button class="btn" style="font-size:11px;padding:4px 10px" onclick="showGistEditForm()">Alterar Configuração</button>`;
+        infoEl.innerHTML = info;
+    } else {
+        badge.innerHTML = '<span class="gist-disconnected">&#9675; Gist não configurado</span>';
+        configSection.style.display = 'block';
+        syncSection.style.display = 'none';
+
+        // Limpar campos
+        document.getElementById('gistToken').value = '';
+        document.getElementById('gistUrl').value = '';
+    }
+}
+
+/** Mostra formulário de edição da config Gist (re-exibe o form) */
+function showGistEditForm() {
+    const cfg = loadGistConfig();
+    document.getElementById('gistConfigSection').style.display = 'block';
+    if (cfg) {
+        document.getElementById('gistToken').value = cfg.token;
+        document.getElementById('gistUrl').value = cfg.gistId;
+    }
 }
 
 // ─── KEYBOARD ───
