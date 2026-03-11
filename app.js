@@ -204,6 +204,7 @@ async function doLogin() {
 }
 
 function doLogout() {
+    stopGistPolling();
     currentUser = null;
     tasks = [];
     sessionStorage.removeItem('taskflow_user');
@@ -295,6 +296,8 @@ async function showApp() {
     await purgeOldCompletedTasksSilent();
     ganttStartDate = getGanttDefaultStart();
     render();
+    // Iniciar polling do Gist se auto-sync estiver ativo
+    startGistPolling();
 }
 
 // ─── TASK DB OPERATIONS ───
@@ -977,11 +980,17 @@ async function toggleAutoSync(checked) {
     if (!db || !currentUser) return;
     db.run("UPDATE gist_config SET auto_sync = ? WHERE user_id = ?", [checked ? 1 : 0, currentUser.id]);
     await saveDBToIDB();
+    if (checked) {
+        startGistPolling();
+    } else {
+        stopGistPolling();
+    }
 }
 
 /** Remove configuração do Gist */
 async function clearGistConfig() {
     if (!confirm('Remover a configuração do Gist deste dispositivo?\n\n(O Gist no GitHub permanece intacto.)')) return;
+    stopGistPolling();
     db.run("DELETE FROM gist_config WHERE user_id = ?", [currentUser.id]);
     await saveDBToIDB();
     showSyncStatus('gistSyncStatus', '✓ Configuração removida.', 'success');
@@ -1013,6 +1022,9 @@ function refreshGistUI() {
         } else {
             info += `<br><strong>Última sincronização:</strong> <em style="color:var(--text-dim)">nunca</em>`;
         }
+        if (cfg.autoSync && gistPoll.running) {
+            info += `<br><strong>Observador:</strong> <span style="color:var(--completed)">&#9679; ativo</span> <span style="color:var(--text-dim);font-size:11px">(polling 60s com ETag)</span>`;
+        }
         info += `<br><br><button class="btn" style="font-size:11px;padding:4px 10px" onclick="showGistEditForm()">Alterar Configuração</button>`;
         infoEl.innerHTML = info;
     } else {
@@ -1035,6 +1047,146 @@ function showGistEditForm() {
         document.getElementById('gistUrl').value = cfg.gistId;
     }
 }
+
+// ─── GIST POLLING (ETag-based, 60s, visibility-aware) ───
+
+const gistPoll = {
+    etag: null,          // ETag do último GET bem-sucedido
+    intervalId: null,    // setInterval ID
+    INTERVAL_MS: 60000,  // 60 segundos
+    running: false,
+    lastCheck: 0
+};
+
+/** Inicia o polling se Gist estiver configurado e auto-sync ativo */
+function startGistPolling() {
+    stopGistPolling();
+    const cfg = loadGistConfig();
+    if (!cfg || !cfg.autoSync) return;
+    gistPoll.running = true;
+    gistPoll.etag = null; // resetar ETag ao iniciar
+    gistPoll.intervalId = setInterval(gistPollTick, gistPoll.INTERVAL_MS);
+    // Primeira checagem imediata (com pequeno delay para não travar a UI)
+    setTimeout(gistPollTick, 3000);
+}
+
+/** Para o polling */
+function stopGistPolling() {
+    if (gistPoll.intervalId) {
+        clearInterval(gistPoll.intervalId);
+        gistPoll.intervalId = null;
+    }
+    gistPoll.running = false;
+    gistPoll.etag = null;
+}
+
+/** Tick do polling — faz GET condicional com If-None-Match */
+async function gistPollTick() {
+    // Não checar se a aba está oculta
+    if (document.hidden) return;
+    const cfg = loadGistConfig();
+    if (!cfg || !cfg.autoSync) { stopGistPolling(); return; }
+
+    try {
+        const headers = {
+            'Authorization': 'Bearer ' + cfg.token,
+            'Accept': 'application/vnd.github.v3+json'
+        };
+        // Conditional request — se temos ETag, enviamos If-None-Match
+        if (gistPoll.etag) {
+            headers['If-None-Match'] = gistPoll.etag;
+        }
+
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { headers });
+
+        // 304 Not Modified — nada mudou, zero custo
+        if (resp.status === 304) {
+            gistPoll.lastCheck = Date.now();
+            return;
+        }
+
+        if (!resp.ok) return; // erro silencioso no polling
+
+        // Armazena o novo ETag
+        const newEtag = resp.headers.get('ETag');
+        if (newEtag) gistPoll.etag = newEtag;
+
+        // Se é a primeira checagem (sem ETag anterior), só armazenamos o ETag
+        // e não fazemos merge — evita merge desnecessário ao iniciar
+        if (!gistPoll.lastCheck) {
+            gistPoll.lastCheck = Date.now();
+            return;
+        }
+
+        gistPoll.lastCheck = Date.now();
+
+        // Conteúdo mudou — fazer pull silencioso
+        const data = await resp.json();
+        if (!data.files || !data.files['taskflow.json']) return;
+
+        const content = data.files['taskflow.json'].content;
+        const incoming = parseImportedJSON(content);
+        if (incoming.length === 0) return;
+
+        const { added, updated } = mergeTaskLists(incoming);
+
+        if (added > 0 || updated > 0) {
+            // Salvar sem acionar auto-push (evita loop)
+            saveAllTasksToDB();
+            render();
+
+            const syncTime = nowISOGMT3();
+            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
+            await saveDBToIDB();
+
+            // Toast discreto
+            showPollToast(added, updated);
+        }
+
+    } catch (err) {
+        // Falhas de rede no polling são silenciosas
+        console.warn('Gist poll error:', err.message);
+    }
+}
+
+/** Toast discreto para notificar pull automático */
+function showPollToast(added, updated) {
+    let toast = document.getElementById('gistPollToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'gistPollToast';
+        toast.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+            background: var(--surface-elevated); border: 1px solid var(--completed-border);
+            color: var(--completed); border-radius: 10px; padding: 10px 18px;
+            font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3); opacity: 0;
+            transition: opacity 0.3s, transform 0.3s; transform: translateY(10px);
+            pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+    }
+    const parts = [];
+    if (added) parts.push(`${added} nova(s)`);
+    if (updated) parts.push(`${updated} atualizada(s)`);
+    toast.textContent = '⟳ Gist sync: ' + parts.join(', ');
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateY(0)';
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+    }, 4000);
+}
+
+/** Visibilitychange — pausar/retomar polling */
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return; // polling tick já checa document.hidden
+    // Ao retornar à aba, faz uma checagem imediata se passou tempo suficiente
+    if (gistPoll.running && (Date.now() - gistPoll.lastCheck > gistPoll.INTERVAL_MS)) {
+        setTimeout(gistPollTick, 500);
+    }
+});
 
 // ─── KEYBOARD ───
 document.addEventListener('keydown', e => {
