@@ -1337,6 +1337,115 @@
       display: none;
     }
 
+    /* GIST SYNC */
+    .gist-config-section {
+      margin-bottom: 18px;
+    }
+
+    .gist-config-section .form-group {
+      margin-bottom: 12px;
+    }
+
+    .gist-config-section .form-group input {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    .gist-config-section .form-group input[type="password"] {
+      letter-spacing: 1px;
+    }
+
+    .gist-config-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+
+    .gist-config-hint a {
+      color: var(--accent-hover);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .gist-config-hint a:hover {
+      color: var(--text);
+    }
+
+    .gist-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+
+    .gist-sync-info {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      line-height: 1.6;
+    }
+
+    .gist-sync-info .last-sync {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-hover);
+      font-size: 11px;
+    }
+
+    .gist-connected {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--completed);
+      padding: 4px 10px;
+      background: var(--completed-bg);
+      border: 1px solid var(--completed-border);
+      border-radius: 12px;
+      margin-bottom: 10px;
+    }
+
+    .gist-disconnected {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      padding: 4px 10px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 10px;
+    }
+
+    .auto-sync-toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .auto-sync-toggle input[type="checkbox"] {
+      accent-color: var(--accent);
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .gist-danger-zone {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
     /* SYNC MODAL */
     .sync-modal {
       max-width: 640px;
@@ -1854,19 +1963,11 @@
         <div class="logo-icon">&#9638;</div> TaskFlow
       </div>
       <div class="header-actions">
-        <button class="btn" onclick="openSyncModal('export')" title="Exportar">
+        <button class="btn" onclick="openSyncModal('gist')" title="Sincronizar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-            <polyline points="7 10 12 15 17 10" />
-            <line x1="12" y1="15" x2="12" y2="3" />
-          </svg><span>Exportar</span>
-        </button>
-        <button class="btn" onclick="openSyncModal('import')" title="Importar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-          </svg><span>Importar</span>
+            <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
+            <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+          </svg><span>Sincronizar</span>
         </button>
         <input type="file" id="csvInput" accept=".json" onchange="importFileJSON(event)">
         <button class="btn btn-primary" onclick="openModal()">
@@ -1883,7 +1984,7 @@
           <div class="user-dropdown" id="userDropdown">
             <div class="user-dropdown-header">
               <strong id="userDropdownName">Usuário</strong>
-              <span id="userDropdownEmail">email@email.com</span>
+              <span id="userDropdownEmail"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="7f1a121e16133f1a121e1613511c1012">[email&#160;protected]</a></span>
             </div>
             <div class="user-dropdown-divider"></div>
             <button class="user-dropdown-item" onclick="openProfileModal()">&#9999;&#65039; Editar Perfil</button>
@@ -1994,12 +2095,77 @@
         <button class="modal-close" onclick="closeSyncModal()">&#x2715;</button>
       </div>
       <div class="sync-tabs">
-        <button class="sync-tab active" id="syncTabExport" onclick="switchSyncTab('export')">&#128228; Exportar</button>
+        <button class="sync-tab active" id="syncTabGist" onclick="switchSyncTab('gist')">&#9729; Gist Sync</button>
+        <button class="sync-tab" id="syncTabExport" onclick="switchSyncTab('export')">&#128228; Exportar</button>
         <button class="sync-tab" id="syncTabImport" onclick="switchSyncTab('import')">&#128229; Importar /
           Mesclar</button>
       </div>
       <div class="modal-body">
-        <div class="sync-panel active" id="syncPanelExport">
+
+        <!-- GIST PANEL -->
+        <div class="sync-panel active" id="syncPanelGist">
+          <div id="gistStatusBadge"></div>
+
+          <div class="gist-config-section" id="gistConfigSection">
+            <div class="form-group">
+              <label>GitHub Personal Access Token</label>
+              <input type="password" id="gistToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+              <div class="gist-config-hint">
+                Crie um token em
+                <a href="https://github.com/settings/tokens/new?scopes=gist&description=TaskFlow+Sync" target="_blank" rel="noopener">github.com/settings/tokens</a>
+                com permissão <code>gist</code>.
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Gist ID ou URL</label>
+              <input type="text" id="gistUrl" placeholder="ID do Gist ou URL completa (https://gist.github.com/user/abc123)" autocomplete="off">
+              <div class="gist-config-hint">
+                Cole o ID ou a URL completa do Gist. O Gist deve conter (ou será criado com) o arquivo <code>taskflow.json</code>.
+              </div>
+            </div>
+            <div class="gist-actions">
+              <button class="btn btn-primary" onclick="saveGistConfig()">Salvar Configuração</button>
+              <button class="btn" onclick="testGistConnection()">Testar Conexão</button>
+              <button class="btn" onclick="createNewGist()">Criar Novo Gist</button>
+            </div>
+          </div>
+
+          <div id="gistSyncSection" style="display:none">
+            <div class="gist-actions">
+              <button class="btn btn-primary" onclick="pushToGist()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                  <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+                </svg>
+                Enviar para Gist
+              </button>
+              <button class="btn" onclick="pullFromGist()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Baixar do Gist
+              </button>
+            </div>
+
+            <div class="auto-sync-toggle">
+              <input type="checkbox" id="autoSyncCheck" onchange="toggleAutoSync(this.checked)">
+              <label for="autoSyncCheck">Auto-sync ao salvar tarefas (push automático)</label>
+            </div>
+
+            <div class="gist-sync-info" id="gistSyncInfo"></div>
+
+            <div class="gist-danger-zone">
+              <button class="btn btn-danger" onclick="clearGistConfig()" style="font-size:12px">
+                &#128465;&#65039; Remover Configuração Gist
+              </button>
+            </div>
+          </div>
+
+          <div class="sync-status" id="gistSyncStatus"></div>
+        </div>
+
+        <div class="sync-panel" id="syncPanelExport">
           <p class="sync-hint">Copie o texto JSON gerado para colar em outro dispositivo, ou baixe como arquivo.</p>
           <textarea class="sync-textarea" id="syncExportText" readonly
             placeholder="Clique em Gerar para produzir o JSON..."></textarea>
@@ -2184,7 +2350,7 @@
      MARKDOWN INTEGRATION SCRIPT
      Expoe funcoes globais que o app.js pode (e deve) chamar.
      ═══════════════════════════════════════════════════════════ -->
-  <script>
+  <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
     (function () {
       'use strict';
 
@@ -2459,15 +2625,4 @@
       /** Funcoes do editor expostas globalmente (usadas nos onclick do HTML) */
       window.switchMdTab = switchMdTab;
       window.mdInsert = mdInsert;
-      window.mdInsertLine = mdInsertLine;
-      window.mdInsertBlock = mdInsertBlock;
-      window.mdInsertLink = mdInsertLink;
-      window.toggleMdToolbar = toggleMdToolbar;
-      window.resetMdToolbar = resetMdToolbar;
-
-    })();
-  </script>
-
-</body>
-
-</html>
+      window.mdInsertLine = mdInsert
