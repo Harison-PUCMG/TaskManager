@@ -12,39 +12,22 @@ const DB_NAME = 'taskflow_db';
 const DB_STORE = 'sqlitedb';
 
 // ─── TIMEZONE UTILITIES (GMT-3 / São Paulo) ───
-const TZ_OFFSET_MS = -3 * 60 * 60 * 1000; // GMT-3 em milissegundos
+const TZ_OFFSET_MS = -3 * 60 * 60 * 1000;
 
-/**
- * Retorna a data de hoje no formato YYYY-MM-DD em GMT-3,
- * independente do fuso do sistema operacional.
- */
 function todayStrGMT3() {
     const d = new Date(Date.now() + TZ_OFFSET_MS);
     return d.toISOString().slice(0, 10);
 }
 
-/**
- * Retorna um timestamp ISO 8601 com offset explícito GMT-3
- * (ex: "2025-06-10T14:32:00.000-03:00").
- * Use no lugar de new Date().toISOString() para createdAt / modifiedAt.
- */
 function nowISOGMT3() {
     const local = new Date(Date.now() + TZ_OFFSET_MS);
     return local.toISOString().slice(0, -1) + '-03:00';
 }
 
-/**
- * Converte uma string YYYY-MM-DD em objeto Date interpretado como
- * meia-noite GMT-3, em vez de meia-noite UTC (comportamento padrão
- * de new Date('YYYY-MM-DD') que causa bug no Windows).
- */
 function dateFromStrGMT3(dateStr) {
     return new Date(dateStr + 'T00:00:00-03:00');
 }
 
-/**
- * Retorna um objeto Date representando meia-noite de hoje em GMT-3.
- */
 function todayGMT3() {
     return dateFromStrGMT3(todayStrGMT3());
 }
@@ -115,7 +98,7 @@ async function initDatabase() {
     last_sync TEXT DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
-    // Migrate: add created_at and modified_at columns if missing (old DBs)
+    // Migrate: add created_at and modified_at columns if missing
     try {
         const cols = db.exec("PRAGMA table_info(tasks)");
         if (cols.length > 0) {
@@ -132,7 +115,6 @@ async function initDatabase() {
     } catch (e) { /* columns already exist */ }
     await saveDBToIDB();
 
-    // Migrate old localStorage tasks if they exist
     try {
         const old = localStorage.getItem('taskflow_tasks');
         if (old) {
@@ -168,11 +150,10 @@ async function doRegister() {
     currentUser = { id: res[0].values[0][0], name: res[0].values[0][1], email: res[0].values[0][2] };
     sessionStorage.setItem('taskflow_user', JSON.stringify(currentUser));
 
-    // Migrate old localStorage tasks to this user
     if (window._migrationTasks && window._migrationTasks.length > 0) {
         for (const t of window._migrationTasks) {
             const id = t.id || genId();
-            const now = nowISOGMT3(); // ← GMT-3
+            const now = nowISOGMT3();
             db.run("INSERT OR IGNORE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 [id, currentUser.id, t.title || '', t.description || '', t.status || 'To Do', t.startDate || '', t.endDate || '', now, now]);
         }
@@ -296,14 +277,13 @@ async function showApp() {
     await purgeOldCompletedTasksSilent();
     ganttStartDate = getGanttDefaultStart();
     render();
-    // Iniciar polling do Gist se auto-sync estiver ativo
     startGistPolling();
 }
 
 // ─── TASK DB OPERATIONS ───
 function loadTasksFromDB() {
     tasks = [];
-    const now = nowISOGMT3(); // ← GMT-3
+    const now = nowISOGMT3();
     const res = db.exec("SELECT id, title, description, status, start_date, end_date, created_at, modified_at FROM tasks WHERE user_id = ?", [currentUser.id]);
     if (res.length > 0) {
         for (const row of res[0].values) {
@@ -339,7 +319,6 @@ async function saveAllTasksToDB() {
 // ─── COMPATIBILITY WRAPPERS ───
 function saveToStorage() {
     saveAllTasksToDB();
-    // Auto-sync para Gist se habilitado (debounced)
     clearTimeout(saveToStorage._gistTimer);
     saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 2000);
 }
@@ -354,19 +333,19 @@ function render() {
 }
 
 function autoUpdateStatuses() {
-    const today = todayGMT3(); // ← GMT-3: meia-noite correta independente do OS
+    const today = todayGMT3();
     let changed = false;
     tasks.forEach(t => {
         if (t.status === 'Completed') return;
-        const endDate = dateFromStrGMT3(t.endDate);   // ← GMT-3
-        const startDate = dateFromStrGMT3(t.startDate); // ← GMT-3
+        const endDate = dateFromStrGMT3(t.endDate);
+        const startDate = dateFromStrGMT3(t.startDate);
         if (today > endDate && t.status !== 'Overdue') {
             t.status = 'Overdue';
-            t.modifiedAt = nowISOGMT3(); // ← GMT-3
+            t.modifiedAt = nowISOGMT3();
             changed = true;
         } else if (t.status === 'To Do' && today >= startDate && today <= endDate) {
             t.status = 'In Progress';
-            t.modifiedAt = nowISOGMT3(); // ← GMT-3
+            t.modifiedAt = nowISOGMT3();
             changed = true;
         }
     });
@@ -398,7 +377,7 @@ function renderTable() {
     tbody.innerHTML = filtered.map(t => `
     <tr>
       <td class="task-title-cell">${esc(t.title)}</td>
-      <td class="task-desc-cell" title="${esc(t.description)}">${esc(t.description)}</td>
+      <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
       <td><span class="status-badge ${statusClass(t.status)}" onclick="toggleStatusDropdown(event, '${t.id}')"><span class="dot"></span>${t.status}</span></td>
       <td class="date-cell">${formatDate(t.startDate)}</td>
       <td class="date-cell">${formatDate(t.endDate)}</td>
@@ -411,8 +390,7 @@ function renderTable() {
 
 // ─── GANTT ───
 function getGanttDefaultStart() {
-    // Parte de "hoje GMT-3" e recua 7 dias
-    const d = todayGMT3(); // ← GMT-3
+    const d = todayGMT3();
     d.setDate(d.getDate() - 7);
     return d;
 }
@@ -424,7 +402,7 @@ function renderGantt() {
     if (!ganttStartDate) ganttStartDate = getGanttDefaultStart();
     const filtered = getFilteredTasks();
     const container = document.getElementById('ganttContent');
-    const today = todayGMT3(); // ← GMT-3
+    const today = todayGMT3();
     const days = [];
     for (let i = 0; i < GANTT_DAYS; i++) { const d = new Date(ganttStartDate); d.setDate(d.getDate() + i); days.push(d); }
     const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -443,8 +421,8 @@ function renderGantt() {
     } else {
         filtered.forEach(t => {
             const sk = statusKey(t.status);
-            const tStart = dateFromStrGMT3(t.startDate); // ← GMT-3
-            const tEnd = dateFromStrGMT3(t.endDate);     // ← GMT-3
+            const tStart = dateFromStrGMT3(t.startDate);
+            const tEnd = dateFromStrGMT3(t.endDate);
             const ganttStart = ganttStartDate.getTime();
             const dayWidth = 100 / GANTT_DAYS;
             const startOffset = (tStart.getTime() - ganttStart) / (1000 * 60 * 60 * 24);
@@ -478,7 +456,12 @@ function showTooltip(e, id) {
     const t = tasks.find(tk => tk.id === id); if (!t) return;
     const tt = document.getElementById('ganttTooltip');
     document.getElementById('ttTitle').textContent = t.title;
-    document.getElementById('ttDesc').textContent = t.description || 'Sem descrição';
+    // Usa renderização Markdown se disponível
+    if (window.setGanttTooltipDesc) {
+        window.setGanttTooltipDesc(t.description);
+    } else {
+        document.getElementById('ttDesc').textContent = t.description || 'Sem descrição';
+    }
     document.getElementById('ttDates').textContent = `${formatDate(t.startDate)} → ${formatDate(t.endDate)} · ${t.status}`;
     tt.classList.add('show'); positionTooltip(e);
 }
@@ -491,8 +474,7 @@ const dragState = { active: false, type: null, taskId: null, startX: 0, origStar
 function getTimelineMetrics(barEl) { const tl = barEl.closest('.gantt-row-timeline'); if (!tl) return null; const r = tl.getBoundingClientRect(); return { timeline: tl, rect: r, pxPerDay: r.width / GANTT_DAYS }; }
 function pxToDateOffset(px) { return Math.round(px / dragState.pxPerDay); }
 function addDaysToDateStr(ds, days) {
-    // Usa dateFromStrGMT3 para evitar o bug de virada de dia no Windows
-    const d = dateFromStrGMT3(ds); // ← GMT-3
+    const d = dateFromStrGMT3(ds);
     d.setDate(d.getDate() + days);
     return d.toISOString().slice(0, 10);
 }
@@ -525,8 +507,8 @@ document.addEventListener('mousemove', e => {
     if (dragState.type === 'left') { let ns = addDaysToDateStr(dragState.origStartDate, daysDelta); if (ns > dragState.origEndDate) ns = dragState.origEndDate; task.startDate = ns; updateDragIndicator(e, ns); }
     else if (dragState.type === 'right') { let ne = addDaysToDateStr(dragState.origEndDate, daysDelta); if (ne < dragState.origStartDate) ne = dragState.origStartDate; task.endDate = ne; updateDragIndicator(e, ne); }
     else { const ns = addDaysToDateStr(dragState.origStartDate, daysDelta), ne = addDaysToDateStr(dragState.origEndDate, daysDelta); task.startDate = ns; task.endDate = ne; const ind = document.getElementById('dragDateIndicator'); ind.textContent = `${formatDate(ns)} → ${formatDate(ne)}`; ind.style.left = (e.clientX + 14) + 'px'; ind.style.top = (e.clientY - 32) + 'px'; ind.classList.add('show'); }
-    const tS = dateFromStrGMT3(task.startDate); // ← GMT-3
-    const tE = dateFromStrGMT3(task.endDate);   // ← GMT-3
+    const tS = dateFromStrGMT3(task.startDate);
+    const tE = dateFromStrGMT3(task.endDate);
     const so = (tS.getTime() - ganttStartDate.getTime()) / (1000 * 60 * 60 * 24), dur = (tE.getTime() - tS.getTime()) / (1000 * 60 * 60 * 24) + 1;
     const bL = so * dayWidth, bW = dur * dayWidth, cL = Math.max(bL, 0), cR = Math.min(bL + bW, 100), cW = Math.max(cR - cL, dayWidth * 0.5);
     dragState.barEl.style.left = cL + '%'; dragState.barEl.style.width = cW + '%';
@@ -540,7 +522,7 @@ document.addEventListener('mouseup', e => {
     const dx = Math.abs(e.clientX - dragState.startX);
     if (dx < 3 && dragState.type === 'move') { const task = tasks.find(t => t.id === dragState.taskId); if (task) { task.startDate = dragState.origStartDate; task.endDate = dragState.origEndDate; } dragState.active = false; editTask(dragState.taskId); return; }
     const draggedTask = tasks.find(t => t.id === dragState.taskId);
-    if (draggedTask) draggedTask.modifiedAt = nowISOGMT3(); // ← GMT-3
+    if (draggedTask) draggedTask.modifiedAt = nowISOGMT3();
     saveToStorage(); dragState.active = false; render();
 });
 
@@ -565,17 +547,30 @@ function switchView(view, btn) {
 // ─── TASK MODAL ───
 function openModal(taskId) {
     editingId = taskId || null;
-    const modal = document.getElementById('taskModal'); modal.classList.add('show');
+    const modal = document.getElementById('taskModal');
+    modal.classList.add('show');
+
+    // Oculta o aviso de inversão de datas
+    const notice = document.getElementById('dateSwapNotice');
+    if (notice) notice.classList.remove('show');
+
     if (editingId) {
         const t = tasks.find(tk => tk.id === editingId);
         document.getElementById('modalTitle').textContent = 'Editar Tarefa';
         document.getElementById('saveBtn').textContent = 'Salvar Alterações';
-        document.getElementById('taskTitle').value = t.title; document.getElementById('taskDesc').value = t.description;
-        document.getElementById('taskStatus').value = t.status; document.getElementById('taskStart').value = t.startDate; document.getElementById('taskEnd').value = t.endDate;
+        document.getElementById('taskTitle').value = t.title;
+        document.getElementById('taskDesc').value = t.description;
+        // Usa a função global setTaskStatus (definida no HTML)
+        if (window.setTaskStatus) window.setTaskStatus(t.status);
+        document.getElementById('taskStart').value = t.startDate;
+        document.getElementById('taskEnd').value = t.endDate;
     } else {
-        document.getElementById('modalTitle').textContent = 'Nova Tarefa'; document.getElementById('saveBtn').textContent = 'Criar Tarefa';
-        document.getElementById('taskTitle').value = ''; document.getElementById('taskDesc').value = ''; document.getElementById('taskStatus').value = 'To Do';
-        const td = todayStrGMT3(); // ← GMT-3
+        document.getElementById('modalTitle').textContent = 'Nova Tarefa';
+        document.getElementById('saveBtn').textContent = 'Criar Tarefa';
+        document.getElementById('taskTitle').value = '';
+        document.getElementById('taskDesc').value = '';
+        if (window.setTaskStatus) window.setTaskStatus('To Do');
+        const td = todayStrGMT3();
         document.getElementById('taskStart').value = td;
         document.getElementById('taskEnd').value = td;
     }
@@ -584,17 +579,31 @@ function openModal(taskId) {
 function closeModal() { document.getElementById('taskModal').classList.remove('show'); editingId = null; }
 
 function saveTask() {
-    const title = document.getElementById('taskTitle').value.trim(), desc = document.getElementById('taskDesc').value.trim();
-    const status = document.getElementById('taskStatus').value, startDate = document.getElementById('taskStart').value, endDate = document.getElementById('taskEnd').value;
-    if (!title) { document.getElementById('taskTitle').focus(); return; } if (!startDate || !endDate) return;
-    if (endDate < startDate) { alert('A data de término deve ser igual ou posterior à data de início.'); return; }
+    const title = document.getElementById('taskTitle').value.trim();
+    const desc  = document.getElementById('taskDesc').value.trim();
+    // Lê o status do campo hidden (mantido em sincronia pelos botões)
+    const status    = document.getElementById('taskStatus').value || 'To Do';
+    let   startDate = document.getElementById('taskStart').value;
+    let   endDate   = document.getElementById('taskEnd').value;
+
+    if (!title) { document.getElementById('taskTitle').focus(); return; }
+    if (!startDate || !endDate) return;
+
+    // Garante inversão caso o app.js seja chamado com datas já trocadas
+    // (a inversão visual já ocorre via handleDateInput, mas protegemos aqui tb)
+    if (endDate < startDate) {
+        [startDate, endDate] = [endDate, startDate];
+        document.getElementById('taskStart').value = startDate;
+        document.getElementById('taskEnd').value   = endDate;
+    }
+
     if (editingId) {
         const t = tasks.find(tk => tk.id === editingId);
         t.title = title; t.description = desc; t.status = status;
         t.startDate = startDate; t.endDate = endDate;
-        t.modifiedAt = nowISOGMT3(); // ← GMT-3
+        t.modifiedAt = nowISOGMT3();
     } else {
-        const now = nowISOGMT3(); // ← GMT-3
+        const now = nowISOGMT3();
         tasks.push({ id: genId(), title, description: desc, status, startDate, endDate, createdAt: now, modifiedAt: now });
     }
     saveToStorage(); closeModal(); render();
@@ -602,12 +611,12 @@ function saveTask() {
 function editTask(id) { openModal(id); }
 function deleteTask(id) { if (!confirm('Tem certeza que deseja excluir esta tarefa?')) return; tasks = tasks.filter(t => t.id !== id); deleteTaskFromDB(id); render(); }
 
-// ─── STATUS DROPDOWN ───
+// ─── STATUS DROPDOWN (na tabela) ───
 function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
 function changeStatus(ns) {
     if (statusChangeId) {
         const t = tasks.find(tk => tk.id === statusChangeId);
-        if (t) { t.status = ns; t.modifiedAt = nowISOGMT3(); saveToStorage(); render(); } // ← GMT-3
+        if (t) { t.status = ns; t.modifiedAt = nowISOGMT3(); saveToStorage(); render(); }
     }
     document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null;
 }
@@ -621,7 +630,14 @@ function openSyncModal(tab) {
     if (tab === 'export') generateSyncExport();
     if (tab === 'gist') refreshGistUI();
 }
-function closeSyncModal() { document.getElementById('syncModal').classList.remove('show'); document.getElementById('syncExportText').value = ''; document.getElementById('syncImportText').value = ''; hideSyncStatus('syncExportStatus'); hideSyncStatus('syncImportStatus'); hideSyncStatus('gistSyncStatus'); }
+function closeSyncModal() {
+    document.getElementById('syncModal').classList.remove('show');
+    document.getElementById('syncExportText').value = '';
+    document.getElementById('syncImportText').value = '';
+    hideSyncStatus('syncExportStatus');
+    hideSyncStatus('syncImportStatus');
+    hideSyncStatus('gistSyncStatus');
+}
 function switchSyncTab(tab) {
     ['gist', 'export', 'import'].forEach(t => {
         const tabBtn = document.getElementById('syncTab' + t.charAt(0).toUpperCase() + t.slice(1));
@@ -642,7 +658,7 @@ function downloadSyncExport() { if (!document.getElementById('syncExportText').v
 function parseImportedJSON(text) {
     const parsed = JSON.parse(text); if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array.');
     const vs = ['Completed', 'In Progress', 'To Do', 'Overdue'];
-    const now = nowISOGMT3(); // ← GMT-3
+    const now = nowISOGMT3();
     return parsed.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
 }
 function mergeTaskLists(incoming) {
@@ -674,7 +690,7 @@ function executeSyncImport() {
         const incoming = parseImportedJSON(text); if (incoming.length === 0) throw new Error('Nenhuma tarefa válida.');
         if (syncImportMode === 'replace') {
             db.run("DELETE FROM tasks WHERE user_id = ?", [currentUser.id]);
-            const now = nowISOGMT3(); // ← GMT-3
+            const now = nowISOGMT3();
             tasks = incoming.map(t => ({ ...t, id: genId(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now }));
             saveToStorage(); render();
             showSyncStatus('syncImportStatus', `✓ ${tasks.length} tarefa(s) importada(s) (substituição).`, 'success');
@@ -695,8 +711,6 @@ function importFileJSON(event) {
 }
 
 // ─── GIST SYNC ───
-
-/** Carrega configuração do Gist do SQLite para o usuário atual */
 function loadGistConfig() {
     if (!db || !currentUser) return null;
     const res = db.exec("SELECT gist_token, gist_id, auto_sync, last_sync FROM gist_config WHERE user_id = ?", [currentUser.id]);
@@ -707,287 +721,120 @@ function loadGistConfig() {
     return null;
 }
 
-/** Extrai o Gist ID de uma URL ou retorna o ID diretamente */
 function extractGistId(input) {
     if (!input) return '';
     input = input.trim();
-    // URL completa: https://gist.github.com/user/abc123 ou https://gist.github.com/abc123
     const urlMatch = input.match(/gist\.github\.com\/(?:[^/]+\/)?([a-f0-9]+)/i);
     if (urlMatch) return urlMatch[1];
-    // Se parece com um hash hexadecimal, é o ID direto
     if (/^[a-f0-9]+$/i.test(input)) return input;
     return input;
 }
 
-/** Salva a configuração do Gist no SQLite */
 async function saveGistConfig() {
     if (!db || !currentUser) return;
     const token = document.getElementById('gistToken').value.trim();
     const rawUrl = document.getElementById('gistUrl').value.trim();
     const gistId = extractGistId(rawUrl);
-
-    if (!token) {
-        showSyncStatus('gistSyncStatus', 'Informe o GitHub Personal Access Token.', 'error');
-        return;
-    }
-    if (!gistId) {
-        showSyncStatus('gistSyncStatus', 'Informe o ID ou URL do Gist.', 'error');
-        return;
-    }
-
+    if (!token) { showSyncStatus('gistSyncStatus', 'Informe o GitHub Personal Access Token.', 'error'); return; }
+    if (!gistId) { showSyncStatus('gistSyncStatus', 'Informe o ID ou URL do Gist.', 'error'); return; }
     db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, COALESCE((SELECT auto_sync FROM gist_config WHERE user_id = ?), 0), COALESCE((SELECT last_sync FROM gist_config WHERE user_id = ?), ''))",
         [currentUser.id, token, gistId, currentUser.id, currentUser.id]);
     await saveDBToIDB();
-
     showSyncStatus('gistSyncStatus', '✓ Configuração salva com sucesso.', 'success');
     refreshGistUI();
 }
 
-/** Cria um novo Gist e salva a configuração */
 async function createNewGist() {
     const token = document.getElementById('gistToken').value.trim();
-    if (!token) {
-        showSyncStatus('gistSyncStatus', 'Informe o token antes de criar um novo Gist.', 'error');
-        return;
-    }
-
+    if (!token) { showSyncStatus('gistSyncStatus', 'Informe o token antes de criar um novo Gist.', 'error'); return; }
     showSyncStatus('gistSyncStatus', 'Criando Gist...', 'info');
-
     try {
-        const exportData = tasks.map(t => ({
-            id: t.id, title: t.title, description: t.description, status: t.status,
-            startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt
-        }));
-
-        const resp = await fetch('https://api.github.com/gists', {
-            method: 'POST',
-            headers: {
-                'Authorization': 'Bearer ' + token,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                description: 'TaskFlow Sync — ' + (currentUser.name || 'User'),
-                public: false,
-                files: {
-                    'taskflow.json': { content: JSON.stringify(exportData, null, 2) }
-                }
-            })
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.message || 'HTTP ' + resp.status);
-        }
-
+        const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
+        const resp = await fetch('https://api.github.com/gists', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'TaskFlow Sync — ' + (currentUser.name || 'User'), public: false, files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
+        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const data = await resp.json();
         const gistId = data.id;
-
-        // Save config
-        db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, 0, ?)",
-            [currentUser.id, token, gistId, nowISOGMT3()]);
+        db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, 0, ?)", [currentUser.id, token, gistId, nowISOGMT3()]);
         await saveDBToIDB();
-
         document.getElementById('gistUrl').value = gistId;
         showSyncStatus('gistSyncStatus', `✓ Gist criado! ID: ${gistId}`, 'success');
         refreshGistUI();
-    } catch (err) {
-        showSyncStatus('gistSyncStatus', '✗ Erro ao criar Gist: ' + err.message, 'error');
-    }
+    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao criar Gist: ' + err.message, 'error'); }
 }
 
-/** Testa a conexão com o Gist configurado */
 async function testGistConnection() {
     const token = document.getElementById('gistToken').value.trim();
     const rawUrl = document.getElementById('gistUrl').value.trim();
     const gistId = extractGistId(rawUrl);
-
-    if (!token || !gistId) {
-        showSyncStatus('gistSyncStatus', 'Preencha token e ID/URL do Gist.', 'error');
-        return;
-    }
-
+    if (!token || !gistId) { showSyncStatus('gistSyncStatus', 'Preencha token e ID/URL do Gist.', 'error'); return; }
     showSyncStatus('gistSyncStatus', 'Testando conexão...', 'info');
-
     try {
-        const resp = await fetch('https://api.github.com/gists/' + gistId, {
-            headers: {
-                'Authorization': 'Bearer ' + token,
-                'Accept': 'application/vnd.github.v3+json'
-            }
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.message || 'HTTP ' + resp.status);
-        }
-
+        const resp = await fetch('https://api.github.com/gists/' + gistId, { headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json' } });
+        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const data = await resp.json();
         const hasFile = data.files && data.files['taskflow.json'];
         const owner = data.owner ? data.owner.login : 'desconhecido';
-
-        if (hasFile) {
-            showSyncStatus('gistSyncStatus', `✓ Conexão OK! Gist de @${owner}, arquivo taskflow.json encontrado.`, 'success');
-        } else {
-            showSyncStatus('gistSyncStatus', `⚠ Gist de @${owner} encontrado, mas sem arquivo taskflow.json. Será criado no primeiro push.`, 'info');
-        }
-    } catch (err) {
-        showSyncStatus('gistSyncStatus', '✗ Falha na conexão: ' + err.message, 'error');
-    }
+        if (hasFile) { showSyncStatus('gistSyncStatus', `✓ Conexão OK! Gist de @${owner}, arquivo taskflow.json encontrado.`, 'success'); }
+        else { showSyncStatus('gistSyncStatus', `⚠ Gist de @${owner} encontrado, mas sem arquivo taskflow.json.`, 'info'); }
+    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Falha na conexão: ' + err.message, 'error'); }
 }
 
-/** Envia tarefas para o Gist (push) */
 async function pushToGist() {
     const cfg = loadGistConfig();
-    if (!cfg) {
-        showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error');
-        return;
-    }
-
+    if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error'); return; }
     showSyncStatus('gistSyncStatus', 'Enviando para Gist...', 'info');
-
     try {
-        const exportData = tasks.map(t => ({
-            id: t.id, title: t.title, description: t.description, status: t.status,
-            startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt
-        }));
-
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            method: 'PATCH',
-            headers: {
-                'Authorization': 'Bearer ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                files: {
-                    'taskflow.json': { content: JSON.stringify(exportData, null, 2) }
-                }
-            })
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.message || 'HTTP ' + resp.status);
-        }
-
+        const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
+        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
-
         showSyncStatus('gistSyncStatus', `✓ ${exportData.length} tarefa(s) enviada(s) ao Gist.`, 'success');
         refreshGistUI();
-    } catch (err) {
-        showSyncStatus('gistSyncStatus', '✗ Erro ao enviar: ' + err.message, 'error');
-    }
+    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao enviar: ' + err.message, 'error'); }
 }
 
-/** Baixa tarefas do Gist e faz merge (pull) */
 async function pullFromGist() {
     const cfg = loadGistConfig();
-    if (!cfg) {
-        showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error');
-        return;
-    }
-
+    if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error'); return; }
     showSyncStatus('gistSyncStatus', 'Baixando do Gist...', 'info');
-
     try {
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            headers: {
-                'Authorization': 'Bearer ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json'
-            }
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.message || 'HTTP ' + resp.status);
-        }
-
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' } });
+        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const data = await resp.json();
-        if (!data.files || !data.files['taskflow.json']) {
-            showSyncStatus('gistSyncStatus', '⚠ Arquivo taskflow.json não encontrado no Gist.', 'info');
-            return;
-        }
-
+        if (!data.files || !data.files['taskflow.json']) { showSyncStatus('gistSyncStatus', '⚠ Arquivo taskflow.json não encontrado no Gist.', 'info'); return; }
         const content = data.files['taskflow.json'].content;
         const incoming = parseImportedJSON(content);
-
-        if (incoming.length === 0) {
-            showSyncStatus('gistSyncStatus', '⚠ Nenhuma tarefa válida no Gist.', 'info');
-            return;
-        }
-
+        if (incoming.length === 0) { showSyncStatus('gistSyncStatus', '⚠ Nenhuma tarefa válida no Gist.', 'info'); return; }
         const { added, updated } = mergeTaskLists(incoming);
-        saveToStorage();
-        render();
-
+        saveToStorage(); render();
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
-
-        const parts = [];
-        if (added) parts.push(`${added} adicionada(s)`);
-        if (updated) parts.push(`${updated} atualizada(s)`);
-        const unch = incoming.length - added - updated;
-        if (unch) parts.push(`${unch} sem alteração`);
-
+        const parts = []; if (added) parts.push(`${added} adicionada(s)`); if (updated) parts.push(`${updated} atualizada(s)`); const unch = incoming.length - added - updated; if (unch) parts.push(`${unch} sem alteração`);
         showSyncStatus('gistSyncStatus', `✓ Mesclagem do Gist: ${parts.join(', ')}.`, 'success');
         refreshGistUI();
-    } catch (err) {
-        showSyncStatus('gistSyncStatus', '✗ Erro ao baixar: ' + err.message, 'error');
-    }
+    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao baixar: ' + err.message, 'error'); }
 }
 
-/** Push silencioso para auto-sync */
 async function silentPushToGist() {
     const cfg = loadGistConfig();
     if (!cfg || !cfg.autoSync) return;
-
     try {
-        const exportData = tasks.map(t => ({
-            id: t.id, title: t.title, description: t.description, status: t.status,
-            startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt
-        }));
-
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            method: 'PATCH',
-            headers: {
-                'Authorization': 'Bearer ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                files: {
-                    'taskflow.json': { content: JSON.stringify(exportData, null, 2) }
-                }
-            })
-        });
-
-        if (resp.ok) {
-            const syncTime = nowISOGMT3();
-            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
-            await saveDBToIDB();
-        }
-    } catch (err) {
-        console.warn('Auto-sync failed:', err.message);
-    }
+        const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
+        if (resp.ok) { const syncTime = nowISOGMT3(); db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]); await saveDBToIDB(); }
+    } catch (err) { console.warn('Auto-sync failed:', err.message); }
 }
 
-/** Liga/desliga auto-sync */
 async function toggleAutoSync(checked) {
     if (!db || !currentUser) return;
     db.run("UPDATE gist_config SET auto_sync = ? WHERE user_id = ?", [checked ? 1 : 0, currentUser.id]);
     await saveDBToIDB();
-    if (checked) {
-        startGistPolling();
-    } else {
-        stopGistPolling();
-    }
+    if (checked) { startGistPolling(); } else { stopGistPolling(); }
 }
 
-/** Remove configuração do Gist */
 async function clearGistConfig() {
     if (!confirm('Remover a configuração do Gist deste dispositivo?\n\n(O Gist no GitHub permanece intacto.)')) return;
     stopGistPolling();
@@ -997,7 +844,6 @@ async function clearGistConfig() {
     refreshGistUI();
 }
 
-/** Atualiza a interface do painel Gist */
 function refreshGistUI() {
     const cfg = loadGistConfig();
     const badge = document.getElementById('gistStatusBadge');
@@ -1009,180 +855,94 @@ function refreshGistUI() {
         badge.innerHTML = '<span class="gist-connected">&#9679; Gist Conectado</span>';
         configSection.style.display = 'none';
         syncSection.style.display = 'block';
-
-        // Auto-sync checkbox
         document.getElementById('autoSyncCheck').checked = cfg.autoSync;
-
-        // Info panel
         let info = `<strong>Gist ID:</strong> <span class="last-sync">${cfg.gistId}</span>`;
-        if (cfg.lastSync) {
-            const d = new Date(cfg.lastSync);
-            const dateStr = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR');
-            info += `<br><strong>Última sincronização:</strong> <span class="last-sync">${dateStr}</span>`;
-        } else {
-            info += `<br><strong>Última sincronização:</strong> <em style="color:var(--text-dim)">nunca</em>`;
-        }
-        if (cfg.autoSync && gistPoll.running) {
-            info += `<br><strong>Observador:</strong> <span style="color:var(--completed)">&#9679; ativo</span> <span style="color:var(--text-dim);font-size:11px">(polling 60s com ETag)</span>`;
-        }
+        if (cfg.lastSync) { const d = new Date(cfg.lastSync); info += `<br><strong>Última sincronização:</strong> <span class="last-sync">${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR')}</span>`; }
+        else { info += `<br><strong>Última sincronização:</strong> <em style="color:var(--text-dim)">nunca</em>`; }
+        if (cfg.autoSync && gistPoll.running) { info += `<br><strong>Observador:</strong> <span style="color:var(--completed)">&#9679; ativo</span> <span style="color:var(--text-dim);font-size:11px">(polling 60s com ETag)</span>`; }
         info += `<br><br><button class="btn" style="font-size:11px;padding:4px 10px" onclick="showGistEditForm()">Alterar Configuração</button>`;
         infoEl.innerHTML = info;
     } else {
         badge.innerHTML = '<span class="gist-disconnected">&#9675; Gist não configurado</span>';
         configSection.style.display = 'block';
         syncSection.style.display = 'none';
-
-        // Limpar campos
         document.getElementById('gistToken').value = '';
         document.getElementById('gistUrl').value = '';
     }
 }
 
-/** Mostra formulário de edição da config Gist (re-exibe o form) */
 function showGistEditForm() {
     const cfg = loadGistConfig();
     document.getElementById('gistConfigSection').style.display = 'block';
-    if (cfg) {
-        document.getElementById('gistToken').value = cfg.token;
-        document.getElementById('gistUrl').value = cfg.gistId;
-    }
+    if (cfg) { document.getElementById('gistToken').value = cfg.token; document.getElementById('gistUrl').value = cfg.gistId; }
 }
 
-// ─── GIST POLLING (ETag-based, 60s, visibility-aware) ───
+// ─── GIST POLLING ───
+const gistPoll = { etag: null, intervalId: null, INTERVAL_MS: 60000, running: false, lastCheck: 0 };
 
-const gistPoll = {
-    etag: null,          // ETag do último GET bem-sucedido
-    intervalId: null,    // setInterval ID
-    INTERVAL_MS: 60000,  // 60 segundos
-    running: false,
-    lastCheck: 0
-};
-
-/** Inicia o polling se Gist estiver configurado e auto-sync ativo */
 function startGistPolling() {
     stopGistPolling();
     const cfg = loadGistConfig();
     if (!cfg || !cfg.autoSync) return;
     gistPoll.running = true;
-    gistPoll.etag = null; // resetar ETag ao iniciar
+    gistPoll.etag = null;
     gistPoll.intervalId = setInterval(gistPollTick, gistPoll.INTERVAL_MS);
-    // Primeira checagem imediata (com pequeno delay para não travar a UI)
     setTimeout(gistPollTick, 3000);
 }
 
-/** Para o polling */
 function stopGistPolling() {
-    if (gistPoll.intervalId) {
-        clearInterval(gistPoll.intervalId);
-        gistPoll.intervalId = null;
-    }
+    if (gistPoll.intervalId) { clearInterval(gistPoll.intervalId); gistPoll.intervalId = null; }
     gistPoll.running = false;
     gistPoll.etag = null;
 }
 
-/** Tick do polling — faz GET condicional com If-None-Match */
 async function gistPollTick() {
-    // Não checar se a aba está oculta
     if (document.hidden) return;
     const cfg = loadGistConfig();
     if (!cfg || !cfg.autoSync) { stopGistPolling(); return; }
-
     try {
-        const headers = {
-            'Authorization': 'Bearer ' + cfg.token,
-            'Accept': 'application/vnd.github.v3+json'
-        };
-        // Conditional request — se temos ETag, enviamos If-None-Match
-        if (gistPoll.etag) {
-            headers['If-None-Match'] = gistPoll.etag;
-        }
-
+        const headers = { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' };
+        if (gistPoll.etag) headers['If-None-Match'] = gistPoll.etag;
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { headers });
-
-        // 304 Not Modified — nada mudou, zero custo
-        if (resp.status === 304) {
-            gistPoll.lastCheck = Date.now();
-            return;
-        }
-
-        if (!resp.ok) return; // erro silencioso no polling
-
-        // Armazena o novo ETag
+        if (resp.status === 304) { gistPoll.lastCheck = Date.now(); return; }
+        if (!resp.ok) return;
         const newEtag = resp.headers.get('ETag');
         if (newEtag) gistPoll.etag = newEtag;
-
-        // Se é a primeira checagem (sem ETag anterior), só armazenamos o ETag
-        // e não fazemos merge — evita merge desnecessário ao iniciar
-        if (!gistPoll.lastCheck) {
-            gistPoll.lastCheck = Date.now();
-            return;
-        }
-
+        if (!gistPoll.lastCheck) { gistPoll.lastCheck = Date.now(); return; }
         gistPoll.lastCheck = Date.now();
-
-        // Conteúdo mudou — fazer pull silencioso
         const data = await resp.json();
         if (!data.files || !data.files['taskflow.json']) return;
-
         const content = data.files['taskflow.json'].content;
         const incoming = parseImportedJSON(content);
         if (incoming.length === 0) return;
-
         const { added, updated } = mergeTaskLists(incoming);
-
         if (added > 0 || updated > 0) {
-            // Salvar sem acionar auto-push (evita loop)
-            saveAllTasksToDB();
-            render();
-
+            saveAllTasksToDB(); render();
             const syncTime = nowISOGMT3();
             db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
             await saveDBToIDB();
-
-            // Toast discreto
             showPollToast(added, updated);
         }
-
-    } catch (err) {
-        // Falhas de rede no polling são silenciosas
-        console.warn('Gist poll error:', err.message);
-    }
+    } catch (err) { console.warn('Gist poll error:', err.message); }
 }
 
-/** Toast discreto para notificar pull automático */
 function showPollToast(added, updated) {
     let toast = document.getElementById('gistPollToast');
     if (!toast) {
         toast = document.createElement('div');
         toast.id = 'gistPollToast';
-        toast.style.cssText = `
-            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
-            background: var(--surface-elevated); border: 1px solid var(--completed-border);
-            color: var(--completed); border-radius: 10px; padding: 10px 18px;
-            font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3); opacity: 0;
-            transition: opacity 0.3s, transform 0.3s; transform: translateY(10px);
-            pointer-events: none;
-        `;
+        toast.style.cssText = `position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--surface-elevated);border:1px solid var(--completed-border);color:var(--completed);border-radius:10px;padding:10px 18px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,0.3);opacity:0;transition:opacity 0.3s,transform 0.3s;transform:translateY(10px);pointer-events:none;`;
         document.body.appendChild(toast);
     }
-    const parts = [];
-    if (added) parts.push(`${added} nova(s)`);
-    if (updated) parts.push(`${updated} atualizada(s)`);
+    const parts = []; if (added) parts.push(`${added} nova(s)`); if (updated) parts.push(`${updated} atualizada(s)`);
     toast.textContent = '⟳ Gist sync: ' + parts.join(', ');
-    toast.style.opacity = '1';
-    toast.style.transform = 'translateY(0)';
+    toast.style.opacity = '1'; toast.style.transform = 'translateY(0)';
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateY(10px)';
-    }, 4000);
+    toast._timer = setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(10px)'; }, 4000);
 }
 
-/** Visibilitychange — pausar/retomar polling */
 document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return; // polling tick já checa document.hidden
-    // Ao retornar à aba, faz uma checagem imediata se passou tempo suficiente
+    if (document.hidden) return;
     if (gistPoll.running && (Date.now() - gistPoll.lastCheck > gistPoll.INTERVAL_MS)) {
         setTimeout(gistPollTick, 500);
     }
@@ -1190,7 +950,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ─── KEYBOARD ───
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeModal(); closeSyncModal(); closeProfileModal(); }
+    if (e.key === 'Escape') { closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); }
     if (e.key === 'Enter') {
         if (document.getElementById('taskModal').classList.contains('show') && document.activeElement.tagName !== 'TEXTAREA') saveTask();
         if (document.getElementById('loginForm').classList.contains('active') && document.getElementById('authScreen').style.display !== 'none') doLogin();
@@ -1202,15 +962,9 @@ document.addEventListener('keydown', e => {
 function esc(str) { const div = document.createElement('div'); div.textContent = str || ''; return div.innerHTML; }
 
 // ─── PURGE OLD COMPLETED TASKS ───
-
 function showPurgeToast(msg, type) {
     let toast = document.getElementById('purgeToast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'purgeToast';
-        toast.className = 'purge-toast';
-        document.body.appendChild(toast);
-    }
+    if (!toast) { toast = document.createElement('div'); toast.id = 'purgeToast'; toast.className = 'purge-toast'; document.body.appendChild(toast); }
     toast.textContent = msg;
     toast.className = 'purge-toast ' + (type || 'info') + ' show';
     clearTimeout(toast._timer);
@@ -1219,62 +973,33 @@ function showPurgeToast(msg, type) {
 
 async function purgeOldCompletedTasks(showConfirm = true) {
     if (!db || !currentUser) return 0;
-
-    // Calcula data-limite em GMT-3: hoje - 30 dias
     const cutoffDate = new Date(Date.now() + TZ_OFFSET_MS);
     cutoffDate.setDate(cutoffDate.getDate() - 30);
-    const cutoffStr = cutoffDate.toISOString().slice(0, 10); // ← GMT-3
-
-    const countRes = db.exec(
-        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?",
-        [currentUser.id, cutoffStr]
-    );
-    const count = (countRes.length && countRes[0].values.length)
-        ? countRes[0].values[0][0]
-        : 0;
-
+    const cutoffStr = cutoffDate.toISOString().slice(0, 10);
+    const countRes = db.exec("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?", [currentUser.id, cutoffStr]);
+    const count = (countRes.length && countRes[0].values.length) ? countRes[0].values[0][0] : 0;
     if (showConfirm) {
-        if (count === 0) {
-            showPurgeToast('✅ Nenhuma tarefa elegível para remoção.', 'info');
-            return 0;
-        }
+        if (count === 0) { showPurgeToast('✅ Nenhuma tarefa elegível para remoção.', 'info'); return 0; }
         const plural = count === 1 ? 'tarefa' : 'tarefas';
-        const ok = window.confirm(
-            `Remover ${count} ${plural} com status Completed\n` +
-            `cujo término foi há mais de 30 dias?\n\n` +
-            `(referência: ${cutoffStr})\n\nEsta ação não pode ser desfeita.`
-        );
+        const ok = window.confirm(`Remover ${count} ${plural} com status Completed\ncujo término foi há mais de 30 dias?\n\n(referência: ${cutoffStr})\n\nEsta ação não pode ser desfeita.`);
         if (!ok) return 0;
     }
-
     if (count === 0) return 0;
-
-    db.run(
-        "DELETE FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?",
-        [currentUser.id, cutoffStr]
-    );
+    db.run("DELETE FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?", [currentUser.id, cutoffStr]);
     await saveDBToIDB();
-
     tasks = tasks.filter(t => !(t.status === 'Completed' && t.endDate <= cutoffStr));
     render();
-
-    if (showConfirm) {
-        const plural2 = count === 1 ? 'tarefa removida' : 'tarefas removidas';
-        showPurgeToast(`🗑️ ${count} ${plural2} com sucesso.`, 'success');
-    }
+    if (showConfirm) { const plural2 = count === 1 ? 'tarefa removida' : 'tarefas removidas'; showPurgeToast(`🗑️ ${count} ${plural2} com sucesso.`, 'success'); }
     return count;
 }
 
-async function purgeOldCompletedTasksSilent() {
-    return purgeOldCompletedTasks(false);
-}
+async function purgeOldCompletedTasksSilent() { return purgeOldCompletedTasks(false); }
 
 // ─── STARTUP ───
 (async function () {
     try {
         await initDatabase();
         document.getElementById('loadingScreen').style.display = 'none';
-
         const saved = sessionStorage.getItem('taskflow_user');
         if (saved) {
             try {
@@ -1287,7 +1012,6 @@ async function purgeOldCompletedTasksSilent() {
                 }
             } catch (e) { }
         }
-
         document.getElementById('authScreen').style.display = 'flex';
     } catch (err) {
         document.getElementById('loadingScreen').innerHTML = `<div style="color:var(--overdue)">Erro ao carregar banco de dados:<br>${err.message}</div>`;
