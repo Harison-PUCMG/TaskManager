@@ -275,6 +275,7 @@ async function showApp() {
     updateUserUI();
     loadTasksFromDB();
     await purgeOldCompletedTasksSilent();
+    await initialGistPull();
     ganttStartDate = getGanttDefaultStart();
     render();
     startGistPolling();
@@ -880,12 +881,35 @@ function showGistEditForm() {
 // ─── GIST POLLING ───
 const gistPoll = { etag: null, intervalId: null, INTERVAL_MS: 60000, running: false, lastCheck: 0 };
 
+async function initialGistPull() {
+    const cfg = loadGistConfig();
+    if (!cfg || !cfg.autoSync) return;
+    try {
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (!resp.ok) return;
+        const newEtag = resp.headers.get('ETag');
+        if (newEtag) gistPoll.etag = newEtag;
+        gistPoll.lastCheck = Date.now();
+        const data = await resp.json();
+        if (!data.files || !data.files['taskflow.json']) return;
+        const incoming = parseImportedJSON(data.files['taskflow.json'].content);
+        if (incoming.length === 0) return;
+        const { added, updated } = mergeTaskLists(incoming);
+        if (added > 0 || updated > 0) {
+            await saveAllTasksToDB();
+            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
+            await saveDBToIDB();
+        }
+    } catch (err) { console.warn('Initial Gist pull failed:', err.message); }
+}
+
 function startGistPolling() {
     stopGistPolling();
     const cfg = loadGistConfig();
     if (!cfg || !cfg.autoSync) return;
     gistPoll.running = true;
-    gistPoll.etag = null;
     gistPoll.intervalId = setInterval(gistPollTick, gistPoll.INTERVAL_MS);
     setTimeout(gistPollTick, 3000);
 }
@@ -908,7 +932,6 @@ async function gistPollTick() {
         if (!resp.ok) return;
         const newEtag = resp.headers.get('ETag');
         if (newEtag) gistPoll.etag = newEtag;
-        if (!gistPoll.lastCheck) { gistPoll.lastCheck = Date.now(); return; }
         gistPoll.lastCheck = Date.now();
         const data = await resp.json();
         if (!data.files || !data.files['taskflow.json']) return;
