@@ -78,18 +78,6 @@ async function initDatabase() {
     password_hash TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   )`);
-    db.run(`CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    status TEXT DEFAULT 'To Do',
-    start_date TEXT NOT NULL,
-    end_date TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now')),
-    modified_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  )`);
     db.run(`CREATE TABLE IF NOT EXISTS gist_config (
     user_id INTEGER PRIMARY KEY,
     gist_token TEXT NOT NULL,
@@ -98,32 +86,7 @@ async function initDatabase() {
     last_sync TEXT DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
-    // Migrate: add created_at and modified_at columns if missing
-    try {
-        const cols = db.exec("PRAGMA table_info(tasks)");
-        if (cols.length > 0) {
-            const colNames = cols[0].values.map(r => r[1]);
-            if (!colNames.includes('created_at')) {
-                db.run("ALTER TABLE tasks ADD COLUMN created_at TEXT DEFAULT (datetime('now'))");
-                db.run("UPDATE tasks SET created_at = datetime('now') WHERE created_at IS NULL");
-            }
-            if (!colNames.includes('modified_at')) {
-                db.run("ALTER TABLE tasks ADD COLUMN modified_at TEXT DEFAULT (datetime('now'))");
-                db.run("UPDATE tasks SET modified_at = datetime('now') WHERE modified_at IS NULL");
-            }
-        }
-    } catch (e) { /* columns already exist */ }
     await saveDBToIDB();
-
-    try {
-        const old = localStorage.getItem('taskflow_tasks');
-        if (old) {
-            const oldTasks = JSON.parse(old);
-            if (Array.isArray(oldTasks) && oldTasks.length > 0) {
-                window._migrationTasks = oldTasks;
-            }
-        }
-    } catch (e) { }
 }
 
 // ─── AUTH FUNCTIONS ───
@@ -149,19 +112,6 @@ async function doRegister() {
     const res = db.exec("SELECT id, name, email FROM users WHERE email = ?", [email]);
     currentUser = { id: res[0].values[0][0], name: res[0].values[0][1], email: res[0].values[0][2] };
     sessionStorage.setItem('taskflow_user', JSON.stringify(currentUser));
-
-    if (window._migrationTasks && window._migrationTasks.length > 0) {
-        for (const t of window._migrationTasks) {
-            const id = t.id || genId();
-            const now = nowISOGMT3();
-            db.run("INSERT OR IGNORE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                [id, currentUser.id, t.title || '', t.description || '', t.status || 'To Do', t.startDate || '', t.endDate || '', now, now]);
-        }
-        await saveDBToIDB();
-        localStorage.removeItem('taskflow_tasks');
-        delete window._migrationTasks;
-    }
-
     showApp();
 }
 
@@ -198,7 +148,6 @@ function doLogout() {
 
 async function doDeleteAccount() {
     if (!confirm('Tem certeza que deseja excluir sua conta? Todas as suas tarefas serão perdidas.')) return;
-    db.run("DELETE FROM tasks WHERE user_id = ?", [currentUser.id]);
     db.run("DELETE FROM users WHERE id = ?", [currentUser.id]);
     await saveDBToIDB();
     doLogout();
@@ -273,53 +222,15 @@ async function showApp() {
     document.getElementById('authScreen').style.display = 'none';
     document.getElementById('appContainer').style.display = 'block';
     updateUserUI();
-    loadTasksFromDB();
+    await loadTasksFromGist();
     await purgeOldCompletedTasksSilent();
-    await initialGistPull();
     ganttStartDate = getGanttDefaultStart();
     render();
     startGistPolling();
 }
 
-// ─── TASK DB OPERATIONS ───
-function loadTasksFromDB() {
-    tasks = [];
-    const now = nowISOGMT3();
-    const res = db.exec("SELECT id, title, description, status, start_date, end_date, created_at, modified_at FROM tasks WHERE user_id = ?", [currentUser.id]);
-    if (res.length > 0) {
-        for (const row of res[0].values) {
-            tasks.push({
-                id: row[0], title: row[1], description: row[2], status: row[3],
-                startDate: row[4], endDate: row[5],
-                createdAt: row[6] || now,
-                modifiedAt: row[7] || now
-            });
-        }
-    }
-}
-
-async function saveTaskToDB(t) {
-    db.run("INSERT OR REPLACE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        [t.id, currentUser.id, t.title, t.description, t.status, t.startDate, t.endDate, t.createdAt, t.modifiedAt]);
-    await saveDBToIDB();
-}
-
-async function deleteTaskFromDB(id) {
-    db.run("DELETE FROM tasks WHERE id = ? AND user_id = ?", [id, currentUser.id]);
-    await saveDBToIDB();
-}
-
-async function saveAllTasksToDB() {
-    for (const t of tasks) {
-        db.run("INSERT OR REPLACE INTO tasks (id, user_id, title, description, status, start_date, end_date, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            [t.id, currentUser.id, t.title, t.description, t.status, t.startDate, t.endDate, t.createdAt, t.modifiedAt]);
-    }
-    await saveDBToIDB();
-}
-
 // ─── COMPATIBILITY WRAPPERS ───
 function saveToStorage() {
-    saveAllTasksToDB();
     clearTimeout(saveToStorage._gistTimer);
     saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 2000);
 }
@@ -610,7 +521,7 @@ function saveTask() {
     saveToStorage(); closeModal(); render();
 }
 function editTask(id) { openModal(id); }
-function deleteTask(id) { if (!confirm('Tem certeza que deseja excluir esta tarefa?')) return; tasks = tasks.filter(t => t.id !== id); deleteTaskFromDB(id); render(); }
+function deleteTask(id) { if (!confirm('Tem certeza que deseja excluir esta tarefa?')) return; tasks = tasks.filter(t => t.id !== id); saveToStorage(); render(); }
 
 // ─── STATUS DROPDOWN (na tabela) ───
 function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
@@ -690,7 +601,6 @@ function executeSyncImport() {
     try {
         const incoming = parseImportedJSON(text); if (incoming.length === 0) throw new Error('Nenhuma tarefa válida.');
         if (syncImportMode === 'replace') {
-            db.run("DELETE FROM tasks WHERE user_id = ?", [currentUser.id]);
             const now = nowISOGMT3();
             tasks = incoming.map(t => ({ ...t, id: genId(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now }));
             saveToStorage(); render();
@@ -809,10 +719,11 @@ async function pullFromGist() {
         const incoming = parseImportedJSON(content);
         if (incoming.length === 0) { showSyncStatus('gistSyncStatus', '⚠ Nenhuma tarefa válida no Gist.', 'info'); return; }
         const { added, updated } = mergeTaskLists(incoming);
-        saveToStorage(); render();
+        render();
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
+        if (added > 0 || updated > 0) saveToStorage();
         const parts = []; if (added) parts.push(`${added} adicionada(s)`); if (updated) parts.push(`${updated} atualizada(s)`); const unch = incoming.length - added - updated; if (unch) parts.push(`${unch} sem alteração`);
         showSyncStatus('gistSyncStatus', `✓ Mesclagem do Gist: ${parts.join(', ')}.`, 'success');
         refreshGistUI();
@@ -821,7 +732,7 @@ async function pullFromGist() {
 
 async function silentPushToGist() {
     const cfg = loadGistConfig();
-    if (!cfg || !cfg.autoSync) return;
+    if (!cfg) return;
     try {
         const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
@@ -881,9 +792,9 @@ function showGistEditForm() {
 // ─── GIST POLLING ───
 const gistPoll = { etag: null, intervalId: null, INTERVAL_MS: 60000, running: false, lastCheck: 0 };
 
-async function initialGistPull() {
+async function loadTasksFromGist() {
     const cfg = loadGistConfig();
-    if (!cfg || !cfg.autoSync) return;
+    if (!cfg) return;
     try {
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
             headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
@@ -894,15 +805,10 @@ async function initialGistPull() {
         gistPoll.lastCheck = Date.now();
         const data = await resp.json();
         if (!data.files || !data.files['taskflow.json']) return;
-        const incoming = parseImportedJSON(data.files['taskflow.json'].content);
-        if (incoming.length === 0) return;
-        const { added, updated } = mergeTaskLists(incoming);
-        if (added > 0 || updated > 0) {
-            await saveAllTasksToDB();
-            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
-            await saveDBToIDB();
-        }
-    } catch (err) { console.warn('Initial Gist pull failed:', err.message); }
+        tasks = parseImportedJSON(data.files['taskflow.json'].content);
+        db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
+        await saveDBToIDB();
+    } catch (err) { console.warn('Failed to load tasks from Gist:', err.message); }
 }
 
 function startGistPolling() {
@@ -940,7 +846,7 @@ async function gistPollTick() {
         if (incoming.length === 0) return;
         const { added, updated } = mergeTaskLists(incoming);
         if (added > 0 || updated > 0) {
-            saveAllTasksToDB(); render();
+            render();
             const syncTime = nowISOGMT3();
             db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
             await saveDBToIDB();
@@ -995,12 +901,10 @@ function showPurgeToast(msg, type) {
 }
 
 async function purgeOldCompletedTasks(showConfirm = true) {
-    if (!db || !currentUser) return 0;
     const cutoffDate = new Date(Date.now() + TZ_OFFSET_MS);
     cutoffDate.setDate(cutoffDate.getDate() - 30);
     const cutoffStr = cutoffDate.toISOString().slice(0, 10);
-    const countRes = db.exec("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?", [currentUser.id, cutoffStr]);
-    const count = (countRes.length && countRes[0].values.length) ? countRes[0].values[0][0] : 0;
+    const count = tasks.filter(t => t.status === 'Completed' && t.endDate <= cutoffStr).length;
     if (showConfirm) {
         if (count === 0) { showPurgeToast('✅ Nenhuma tarefa elegível para remoção.', 'info'); return 0; }
         const plural = count === 1 ? 'tarefa' : 'tarefas';
@@ -1008,9 +912,8 @@ async function purgeOldCompletedTasks(showConfirm = true) {
         if (!ok) return 0;
     }
     if (count === 0) return 0;
-    db.run("DELETE FROM tasks WHERE user_id = ? AND status = 'Completed' AND end_date <= ?", [currentUser.id, cutoffStr]);
-    await saveDBToIDB();
     tasks = tasks.filter(t => !(t.status === 'Completed' && t.endDate <= cutoffStr));
+    saveToStorage();
     render();
     if (showConfirm) { const plural2 = count === 1 ? 'tarefa removida' : 'tarefas removidas'; showPurgeToast(`🗑️ ${count} ${plural2} com sucesso.`, 'success'); }
     return count;
