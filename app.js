@@ -6,6 +6,7 @@ let activeFilters = new Set();
 let searchQuery = '';
 let editingId = null;
 let statusChangeId = null;
+let gistDataLoaded = false;
 let ganttStartDate = null;
 const GANTT_DAYS = 28;
 const DB_NAME = 'taskflow_db';
@@ -136,6 +137,7 @@ async function doLogin() {
 
 function doLogout() {
     stopGistPolling();
+    gistDataLoaded = false;
     currentUser = null;
     tasks = [];
     sessionStorage.removeItem('taskflow_user');
@@ -591,10 +593,69 @@ function mergeTaskLists(incoming) {
             } else if (exMod === incMod) {
                 if (!ex.description && inc.description) { ex.description = inc.description; updated++; }
             }
-        } else { tasks.push({ ...inc, id: genId() }); added++; }
+        } else { tasks.push({ ...inc }); added++; }
     }
     return { added, updated };
 }
+
+// ─── BIDIRECTIONAL RECONCILE (per-task modifiedAt wins) ───
+function reconcileWithRemote(localTasks, remoteTasks, lastSyncTime) {
+    const localById = new Map();
+    const localByTitle = new Map();
+    for (const t of localTasks) {
+        localById.set(t.id, t);
+        localByTitle.set(t.title.toLowerCase(), t);
+    }
+    const remoteById = new Map();
+    const remoteByTitle = new Map();
+    for (const t of remoteTasks) {
+        remoteById.set(t.id, t);
+        remoteByTitle.set(t.title.toLowerCase(), t);
+    }
+
+    const merged = [];
+    const processedLocalIds = new Set();
+    let added = 0, updated = 0, removed = 0;
+
+    // Process all remote tasks
+    for (const rt of remoteTasks) {
+        let localMatch = localById.get(rt.id);
+        if (!localMatch) localMatch = localByTitle.get(rt.title.toLowerCase());
+
+        if (localMatch) {
+            processedLocalIds.add(localMatch.id);
+            const lMod = localMatch.modifiedAt || '';
+            const rMod = rt.modifiedAt || '';
+            if (rMod > lMod) {
+                merged.push({ ...rt });
+                updated++;
+            } else {
+                merged.push({ ...localMatch });
+            }
+        } else {
+            merged.push({ ...rt });
+            added++;
+        }
+    }
+
+    // Process local-only tasks (not in remote)
+    for (const lt of localTasks) {
+        if (processedLocalIds.has(lt.id)) continue;
+        if (remoteByTitle.has(lt.title.toLowerCase())) continue;
+
+        const created = lt.createdAt || '';
+        if (!lastSyncTime || created > lastSyncTime) {
+            // Created locally after last sync — keep it
+            merged.push({ ...lt });
+        } else {
+            // Existed before last sync but absent from remote — deleted remotely
+            removed++;
+        }
+    }
+
+    return { merged, added, updated, removed };
+}
+
 function executeSyncImport() {
     const text = document.getElementById('syncImportText').value.trim();
     if (!text) { showSyncStatus('syncImportStatus', 'Cole o JSON antes de importar.', 'error'); return; }
@@ -693,17 +754,30 @@ async function testGistConnection() {
 async function pushToGist() {
     const cfg = loadGistConfig();
     if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error'); return; }
-    showSyncStatus('gistSyncStatus', 'Enviando para Gist...', 'info');
+    showSyncStatus('gistSyncStatus', 'Sincronizando com Gist...', 'info');
     try {
+        // Pull and merge before pushing to avoid overwriting newer remote data
+        const getResp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (getResp.ok) {
+            const getData = await getResp.json();
+            if (getData.files && getData.files['taskflow.json']) {
+                const remoteTasks = parseImportedJSON(getData.files['taskflow.json'].content);
+                const { merged } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
+                tasks = merged;
+                render();
+            }
+        }
         const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
-        showSyncStatus('gistSyncStatus', `✓ ${exportData.length} tarefa(s) enviada(s) ao Gist.`, 'success');
+        showSyncStatus('gistSyncStatus', `✓ ${exportData.length} tarefa(s) sincronizada(s) com o Gist.`, 'success');
         refreshGistUI();
-    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao enviar: ' + err.message, 'error'); }
+    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao sincronizar: ' + err.message, 'error'); }
 }
 
 async function pullFromGist() {
@@ -731,12 +805,34 @@ async function pullFromGist() {
 }
 
 async function silentPushToGist() {
+    if (!gistDataLoaded) return;
     const cfg = loadGistConfig();
     if (!cfg) return;
+    clearTimeout(saveToStorage._gistTimer);
     try {
+        // Pull remote first to avoid overwriting newer data
+        const getResp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (!getResp.ok) return; // Can't verify remote state — abort push
+        const getData = await getResp.json();
+        if (getData.files && getData.files['taskflow.json']) {
+            const remoteTasks = parseImportedJSON(getData.files['taskflow.json'].content);
+            const { merged, localChanged } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
+            tasks = merged;
+            if (localChanged) render();
+            clearTimeout(saveToStorage._gistTimer); // prevent re-push from autoUpdateStatuses
+        }
+        // Push merged result
         const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
-        if (resp.ok) { const syncTime = nowISOGMT3(); db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]); await saveDBToIDB(); }
+        if (resp.ok) {
+            const syncTime = nowISOGMT3();
+            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
+            await saveDBToIDB();
+            const etag = resp.headers.get('ETag');
+            if (etag) gistPoll.etag = etag;
+        }
     } catch (err) { console.warn('Auto-sync failed:', err.message); }
 }
 
@@ -806,6 +902,7 @@ async function loadTasksFromGist() {
         const data = await resp.json();
         if (!data.files || !data.files['taskflow.json']) return;
         tasks = parseImportedJSON(data.files['taskflow.json'].content);
+        gistDataLoaded = true;
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
         await saveDBToIDB();
     } catch (err) { console.warn('Failed to load tasks from Gist:', err.message); }
@@ -842,11 +939,13 @@ async function gistPollTick() {
         const data = await resp.json();
         if (!data.files || !data.files['taskflow.json']) return;
         const content = data.files['taskflow.json'].content;
-        const incoming = parseImportedJSON(content);
-        if (incoming.length === 0) return;
-        const { added, updated } = mergeTaskLists(incoming);
-        if (added > 0 || updated > 0) {
+        const remoteTasks = parseImportedJSON(content);
+        if (remoteTasks.length === 0) return;
+        const { merged, added, updated, removed } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
+        if (added > 0 || updated > 0 || removed > 0) {
+            tasks = merged;
             render();
+            clearTimeout(saveToStorage._gistTimer);
             const syncTime = nowISOGMT3();
             db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
             await saveDBToIDB();
@@ -870,9 +969,38 @@ function showPollToast(added, updated) {
     toast._timer = setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(10px)'; }, 4000);
 }
 
+async function reconcileOnReturn() {
+    const cfg = loadGistConfig();
+    if (!cfg) return;
+    try {
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
+            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (!resp.ok) return;
+        const etag = resp.headers.get('ETag');
+        if (etag) gistPoll.etag = etag;
+        gistPoll.lastCheck = Date.now();
+        const data = await resp.json();
+        if (!data.files || !data.files['taskflow.json']) return;
+        const remoteTasks = parseImportedJSON(data.files['taskflow.json'].content);
+        const { merged, added, updated, removed } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
+        if (added > 0 || updated > 0 || removed > 0) {
+            tasks = merged;
+            gistDataLoaded = true;
+            render();
+            clearTimeout(saveToStorage._gistTimer);
+            db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
+            await saveDBToIDB();
+        }
+    } catch (err) { console.warn('Visibility sync failed:', err.message); }
+}
+
 document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
-    if (gistPoll.running && (Date.now() - gistPoll.lastCheck > gistPoll.INTERVAL_MS)) {
+    if (document.hidden || !currentUser) return;
+    const elapsed = Date.now() - gistPoll.lastCheck;
+    if (elapsed > 2 * 60 * 1000) {
+        reconcileOnReturn();
+    } else if (gistPoll.running && elapsed > gistPoll.INTERVAL_MS) {
         setTimeout(gistPollTick, 500);
     }
 });
