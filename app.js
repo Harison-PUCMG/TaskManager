@@ -2,6 +2,7 @@
 let db = null;
 let currentUser = null;
 let tasks = [];
+let tombstones = [];
 let activeFilters = new Set();
 let searchQuery = '';
 let editingId = null;
@@ -63,6 +64,28 @@ async function loadDBFromIDB() {
     return new Promise((resolve) => { req.onsuccess = () => resolve(req.result || null); req.onerror = () => resolve(null); });
 }
 
+// ─── LOCAL TASK PERSISTENCE (durable cache — survives reload even if Gist is offline) ───
+async function saveLocalState() {
+    if (!db || !currentUser) return;
+    const payload = JSON.stringify({ tasks, tombstones });
+    db.run("INSERT OR REPLACE INTO task_store (user_id, data) VALUES (?, ?)", [currentUser.id, payload]);
+    await saveDBToIDB();
+}
+function loadLocalState() {
+    if (!db || !currentUser) return { tasks: [], tombstones: [] };
+    try {
+        const res = db.exec("SELECT data FROM task_store WHERE user_id = ?", [currentUser.id]);
+        if (res.length > 0 && res[0].values.length > 0) {
+            const parsed = JSON.parse(res[0].values[0][0] || '{}');
+            return {
+                tasks: Array.isArray(parsed.tasks) ? normalizeTasks(parsed.tasks) : [],
+                tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones.filter(t => t && t.id && t.deletedAt) : []
+            };
+        }
+    } catch (e) { console.warn('loadLocalState failed:', e.message); }
+    return { tasks: [], tombstones: [] };
+}
+
 // ─── INIT DATABASE ───
 async function initDatabase() {
     const SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.11.0/${f}` });
@@ -85,6 +108,11 @@ async function initDatabase() {
     gist_id TEXT NOT NULL,
     auto_sync INTEGER DEFAULT 0,
     last_sync TEXT DEFAULT '',
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+    db.run(`CREATE TABLE IF NOT EXISTS task_store (
+    user_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
     await saveDBToIDB();
@@ -140,6 +168,7 @@ function doLogout() {
     gistDataLoaded = false;
     currentUser = null;
     tasks = [];
+    tombstones = [];
     sessionStorage.removeItem('taskflow_user');
     closeUserDropdown();
     document.getElementById('appContainer').style.display = 'none';
@@ -233,6 +262,7 @@ async function showApp() {
 
 // ─── COMPATIBILITY WRAPPERS ───
 function saveToStorage() {
+    saveLocalState();
     clearTimeout(saveToStorage._gistTimer);
     saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 2000);
 }
@@ -523,7 +553,13 @@ function saveTask() {
     saveToStorage(); closeModal(); render();
 }
 function editTask(id) { openModal(id); }
-function deleteTask(id) { if (!confirm('Tem certeza que deseja excluir esta tarefa?')) return; tasks = tasks.filter(t => t.id !== id); saveToStorage(); render(); }
+function deleteTask(id) {
+    if (!confirm('Tem certeza que deseja excluir esta tarefa?')) return;
+    const t = tasks.find(tk => tk.id === id);
+    if (t) tombstones.push({ id: t.id, title: t.title, deletedAt: nowISOGMT3() });
+    tasks = tasks.filter(t => t.id !== id);
+    saveToStorage(); render();
+}
 
 // ─── STATUS DROPDOWN (na tabela) ───
 function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
@@ -569,11 +605,40 @@ function generateSyncExport() { const exportData = tasks.map(t => ({ id: t.id, t
 function copySyncExport() { const ta = document.getElementById('syncExportText'); if (!ta.value) generateSyncExport(); navigator.clipboard.writeText(ta.value).then(() => { showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }).catch(() => { ta.select(); document.execCommand('copy'); showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }); }
 function downloadSyncExport() { if (!document.getElementById('syncExportText').value) generateSyncExport(); const text = document.getElementById('syncExportText').value; const blob = new Blob([text], { type: 'application/json;charset=utf-8;' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `taskflow_${todayStrGMT3()}.json`; a.click(); URL.revokeObjectURL(url); showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success'); }
 
-function parseImportedJSON(text) {
-    const parsed = JSON.parse(text); if (!Array.isArray(parsed)) throw new Error('JSON deve ser um array.');
+function normalizeTasks(arr) {
     const vs = ['Completed', 'In Progress', 'To Do', 'Overdue'];
     const now = nowISOGMT3();
-    return parsed.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
+    return arr.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
+}
+function parseImportedJSON(text) {
+    const parsed = JSON.parse(text);
+    const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.tasks) ? parsed.tasks : null);
+    if (!arr) throw new Error('JSON deve ser um array de tarefas.');
+    return normalizeTasks(arr);
+}
+function parseTombstonesContent(content) {
+    try {
+        const parsed = JSON.parse(content);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.tombstones) ? parsed.tombstones : []);
+        return arr.filter(t => t && t.id && t.deletedAt).map(t => ({ id: t.id, title: t.title || '', deletedAt: t.deletedAt }));
+    } catch (e) { return []; }
+}
+// Read tasks / tombstones from a fetched Gist payload (tombstones live in a sidecar
+// file so legacy clients that only know taskflow.json keep working unchanged).
+function readGistTasks(data) {
+    if (!data.files || !data.files['taskflow.json']) return null;
+    return parseImportedJSON(data.files['taskflow.json'].content);
+}
+function readGistTombstones(data) {
+    if (!data.files || !data.files['taskflow.deleted.json']) return [];
+    return parseTombstonesContent(data.files['taskflow.deleted.json'].content);
+}
+function buildGistFiles() {
+    const taskArr = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
+    return {
+        'taskflow.json': { content: JSON.stringify(taskArr, null, 2) },
+        'taskflow.deleted.json': { content: JSON.stringify(tombstones, null, 2) }
+    };
 }
 function mergeTaskLists(incoming) {
     let added = 0, updated = 0;
@@ -598,62 +663,71 @@ function mergeTaskLists(incoming) {
     return { added, updated };
 }
 
-// ─── BIDIRECTIONAL RECONCILE (per-task modifiedAt wins) ───
-function reconcileWithRemote(localTasks, remoteTasks, lastSyncTime) {
-    const localById = new Map();
-    const localByTitle = new Map();
-    for (const t of localTasks) {
-        localById.set(t.id, t);
-        localByTitle.set(t.title.toLowerCase(), t);
+// ─── TOMBSTONE HELPERS ───
+function mergeTombstones(a, b) {
+    const map = new Map();
+    for (const t of [...(a || []), ...(b || [])]) {
+        if (!t || !t.id || !t.deletedAt) continue;
+        const prev = map.get(t.id);
+        if (!prev || t.deletedAt > prev.deletedAt) map.set(t.id, { id: t.id, title: t.title || '', deletedAt: t.deletedAt });
     }
-    const remoteById = new Map();
-    const remoteByTitle = new Map();
-    for (const t of remoteTasks) {
-        remoteById.set(t.id, t);
-        remoteByTitle.set(t.title.toLowerCase(), t);
+    return Array.from(map.values());
+}
+function pruneTombstones(tombs) {
+    const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    return (tombs || []).filter(t => { const d = Date.parse(t.deletedAt); return isNaN(d) || d >= cutoffMs; });
+}
+
+// ─── BIDIRECTIONAL RECONCILE (per-task modifiedAt wins; deletions only via tombstones) ───
+// A task absent from the remote is NEVER dropped by absence — that was the data-loss bug.
+// It is removed only when a tombstone for it exists whose deletedAt is newer than the
+// task's modifiedAt (so a task re-created/edited after deletion still survives).
+function reconcileWithRemote(localTasks, localTombstones, remoteTasks, remoteTombstones) {
+    const tombs = mergeTombstones(localTombstones, remoteTombstones);
+    const tombById = new Map();
+    const tombByTitle = new Map();
+    for (const tb of tombs) {
+        tombById.set(tb.id, tb);
+        if (tb.title) {
+            const k = tb.title.toLowerCase();
+            const prev = tombByTitle.get(k);
+            if (!prev || tb.deletedAt > prev.deletedAt) tombByTitle.set(k, tb);
+        }
     }
+    const isDead = (task) => {
+        const tb = tombById.get(task.id) || tombByTitle.get((task.title || '').toLowerCase());
+        return !!tb && (tb.deletedAt || '') > (task.modifiedAt || '');
+    };
+
+    const localById = new Map(localTasks.map(t => [t.id, t]));
+    const localByTitle = new Map(localTasks.map(t => [t.title.toLowerCase(), t]));
+    const remoteByTitle = new Map(remoteTasks.map(t => [t.title.toLowerCase(), t]));
 
     const merged = [];
     const processedLocalIds = new Set();
-    let added = 0, updated = 0, removed = 0;
+    let added = 0, updated = 0, removed = 0, localOnly = 0;
 
     // Process all remote tasks
     for (const rt of remoteTasks) {
-        let localMatch = localById.get(rt.id);
-        if (!localMatch) localMatch = localByTitle.get(rt.title.toLowerCase());
-
-        if (localMatch) {
-            processedLocalIds.add(localMatch.id);
-            const lMod = localMatch.modifiedAt || '';
-            const rMod = rt.modifiedAt || '';
-            if (rMod > lMod) {
-                merged.push({ ...rt });
-                updated++;
-            } else {
-                merged.push({ ...localMatch });
-            }
-        } else {
-            merged.push({ ...rt });
-            added++;
-        }
+        const localMatch = localById.get(rt.id) || localByTitle.get(rt.title.toLowerCase());
+        if (localMatch) processedLocalIds.add(localMatch.id);
+        const chosen = (localMatch && (localMatch.modifiedAt || '') >= (rt.modifiedAt || '')) ? localMatch : rt;
+        if (isDead(chosen)) { removed++; continue; }
+        if (!localMatch) added++;
+        else if (chosen === rt) updated++;
+        merged.push({ ...chosen });
     }
 
-    // Process local-only tasks (not in remote)
+    // Process local-only tasks (absent from remote) — kept unless explicitly tombstoned
     for (const lt of localTasks) {
         if (processedLocalIds.has(lt.id)) continue;
         if (remoteByTitle.has(lt.title.toLowerCase())) continue;
-
-        const created = lt.createdAt || '';
-        if (!lastSyncTime || created > lastSyncTime) {
-            // Created locally after last sync — keep it
-            merged.push({ ...lt });
-        } else {
-            // Existed before last sync but absent from remote — deleted remotely
-            removed++;
-        }
+        if (isDead(lt)) { removed++; continue; }
+        merged.push({ ...lt });
+        localOnly++;
     }
 
-    return { merged, added, updated, removed };
+    return { merged, tombstones: pruneTombstones(tombs), added, updated, removed, localOnly };
 }
 
 function executeSyncImport() {
@@ -721,8 +795,7 @@ async function createNewGist() {
     if (!token) { showSyncStatus('gistSyncStatus', 'Informe o token antes de criar um novo Gist.', 'error'); return; }
     showSyncStatus('gistSyncStatus', 'Criando Gist...', 'info');
     try {
-        const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
-        const resp = await fetch('https://api.github.com/gists', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'TaskFlow Sync — ' + (currentUser.name || 'User'), public: false, files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
+        const resp = await fetch('https://api.github.com/gists', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'TaskFlow Sync — ' + (currentUser.name || 'User'), public: false, files: buildGistFiles() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const data = await resp.json();
         const gistId = data.id;
@@ -762,20 +835,20 @@ async function pushToGist() {
         });
         if (getResp.ok) {
             const getData = await getResp.json();
-            if (getData.files && getData.files['taskflow.json']) {
-                const remoteTasks = parseImportedJSON(getData.files['taskflow.json'].content);
-                const { merged } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
-                tasks = merged;
+            const remoteTasks = readGistTasks(getData);
+            if (remoteTasks) {
+                const r = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(getData));
+                tasks = r.merged; tombstones = r.tombstones;
                 render();
             }
         }
-        const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: buildGistFiles() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
+        await saveLocalState();
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
-        showSyncStatus('gistSyncStatus', `✓ ${exportData.length} tarefa(s) sincronizada(s) com o Gist.`, 'success');
+        showSyncStatus('gistSyncStatus', `✓ ${tasks.length} tarefa(s) sincronizada(s) com o Gist.`, 'success');
         refreshGistUI();
     } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao sincronizar: ' + err.message, 'error'); }
 }
@@ -788,17 +861,16 @@ async function pullFromGist() {
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' } });
         if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
         const data = await resp.json();
-        if (!data.files || !data.files['taskflow.json']) { showSyncStatus('gistSyncStatus', '⚠ Arquivo taskflow.json não encontrado no Gist.', 'info'); return; }
-        const content = data.files['taskflow.json'].content;
-        const incoming = parseImportedJSON(content);
-        if (incoming.length === 0) { showSyncStatus('gistSyncStatus', '⚠ Nenhuma tarefa válida no Gist.', 'info'); return; }
-        const { added, updated } = mergeTaskLists(incoming);
+        const remoteTasks = readGistTasks(data);
+        if (!remoteTasks) { showSyncStatus('gistSyncStatus', '⚠ Arquivo taskflow.json não encontrado no Gist.', 'info'); return; }
+        const { merged, tombstones: ts, added, updated } = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(data));
+        tasks = merged; tombstones = ts;
         render();
+        await saveLocalState();
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
-        if (added > 0 || updated > 0) saveToStorage();
-        const parts = []; if (added) parts.push(`${added} adicionada(s)`); if (updated) parts.push(`${updated} atualizada(s)`); const unch = incoming.length - added - updated; if (unch) parts.push(`${unch} sem alteração`);
+        const parts = []; if (added) parts.push(`${added} adicionada(s)`); if (updated) parts.push(`${updated} atualizada(s)`); if (!added && !updated) parts.push('nenhuma alteração');
         showSyncStatus('gistSyncStatus', `✓ Mesclagem do Gist: ${parts.join(', ')}.`, 'success');
         refreshGistUI();
     } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao baixar: ' + err.message, 'error'); }
@@ -814,26 +886,39 @@ async function silentPushToGist() {
         const getResp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
             headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
         });
-        if (!getResp.ok) return; // Can't verify remote state — abort push
+        if (!getResp.ok) {
+            // Can't verify remote state — DON'T push (would risk clobbering remote).
+            // Local cache already holds the change, so retry later instead of dropping it.
+            scheduleSilentPushRetry();
+            return;
+        }
         const getData = await getResp.json();
-        if (getData.files && getData.files['taskflow.json']) {
-            const remoteTasks = parseImportedJSON(getData.files['taskflow.json'].content);
-            const { merged, localChanged } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
-            tasks = merged;
-            if (localChanged) render();
+        const remoteTasks = readGistTasks(getData);
+        if (remoteTasks) {
+            const r = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(getData));
+            const changed = r.added > 0 || r.updated > 0 || r.removed > 0;
+            tasks = r.merged; tombstones = r.tombstones;
+            if (changed) render();
             clearTimeout(saveToStorage._gistTimer); // prevent re-push from autoUpdateStatuses
         }
-        // Push merged result
-        const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'taskflow.json': { content: JSON.stringify(exportData, null, 2) } } }) });
+        // Push merged result (tasks + tombstones)
+        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: buildGistFiles() }) });
         if (resp.ok) {
+            await saveLocalState();
             const syncTime = nowISOGMT3();
             db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
             await saveDBToIDB();
             const etag = resp.headers.get('ETag');
             if (etag) gistPoll.etag = etag;
+        } else {
+            scheduleSilentPushRetry();
         }
-    } catch (err) { console.warn('Auto-sync failed:', err.message); }
+    } catch (err) { console.warn('Auto-sync failed:', err.message); scheduleSilentPushRetry(); }
+}
+
+function scheduleSilentPushRetry() {
+    clearTimeout(saveToStorage._gistTimer);
+    saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 30000);
 }
 
 async function toggleAutoSync(checked) {
@@ -889,23 +974,35 @@ function showGistEditForm() {
 const gistPoll = { etag: null, intervalId: null, INTERVAL_MS: 60000, running: false, lastCheck: 0 };
 
 async function loadTasksFromGist() {
+    // Always start from the durable local cache so nothing is lost if the Gist is
+    // unreachable. The Gist is then MERGED in, never used as a blind replacement.
+    const local = loadLocalState();
+    tasks = local.tasks;
+    tombstones = local.tombstones;
     const cfg = loadGistConfig();
-    if (!cfg) return;
+    if (!cfg) { gistDataLoaded = true; return; }
     try {
         const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
             headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
         });
-        if (!resp.ok) return;
+        if (!resp.ok) { gistDataLoaded = true; return; } // offline — keep local cache, sync later
         const newEtag = resp.headers.get('ETag');
         if (newEtag) gistPoll.etag = newEtag;
         gistPoll.lastCheck = Date.now();
         const data = await resp.json();
-        if (!data.files || !data.files['taskflow.json']) return;
-        tasks = parseImportedJSON(data.files['taskflow.json'].content);
+        const remoteTasks = readGistTasks(data);
+        if (!remoteTasks) { gistDataLoaded = true; return; }
+        const { merged, tombstones: ts, localOnly } = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(data));
+        tasks = merged;
+        tombstones = ts;
         gistDataLoaded = true;
+        await saveLocalState();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
         await saveDBToIDB();
-    } catch (err) { console.warn('Failed to load tasks from Gist:', err.message); }
+        // Local cache had task(s) the Gist never received (e.g. an earlier failed push) —
+        // push them up now so they are no longer at risk.
+        if (localOnly > 0) saveToStorage();
+    } catch (err) { console.warn('Failed to load tasks from Gist:', err.message); gistDataLoaded = true; }
 }
 
 function startGistPolling() {
@@ -937,19 +1034,21 @@ async function gistPollTick() {
         if (newEtag) gistPoll.etag = newEtag;
         gistPoll.lastCheck = Date.now();
         const data = await resp.json();
-        if (!data.files || !data.files['taskflow.json']) return;
-        const content = data.files['taskflow.json'].content;
-        const remoteTasks = parseImportedJSON(content);
-        if (remoteTasks.length === 0) return;
-        const { merged, added, updated, removed } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
+        const remoteTasks = readGistTasks(data);
+        if (!remoteTasks) return;
+        const { merged, tombstones: ts, added, updated, removed } = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(data));
         if (added > 0 || updated > 0 || removed > 0) {
             tasks = merged;
+            tombstones = ts;
             render();
             clearTimeout(saveToStorage._gistTimer);
+            await saveLocalState();
             const syncTime = nowISOGMT3();
             db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
             await saveDBToIDB();
             showPollToast(added, updated);
+        } else {
+            tombstones = ts;
         }
     } catch (err) { console.warn('Gist poll error:', err.message); }
 }
@@ -981,14 +1080,16 @@ async function reconcileOnReturn() {
         if (etag) gistPoll.etag = etag;
         gistPoll.lastCheck = Date.now();
         const data = await resp.json();
-        if (!data.files || !data.files['taskflow.json']) return;
-        const remoteTasks = parseImportedJSON(data.files['taskflow.json'].content);
-        const { merged, added, updated, removed } = reconcileWithRemote(tasks, remoteTasks, cfg.lastSync || '');
+        const remoteTasks = readGistTasks(data);
+        if (!remoteTasks) return;
+        const { merged, tombstones: ts, added, updated, removed } = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(data));
+        tombstones = ts;
         if (added > 0 || updated > 0 || removed > 0) {
             tasks = merged;
             gistDataLoaded = true;
             render();
             clearTimeout(saveToStorage._gistTimer);
+            await saveLocalState();
             db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [nowISOGMT3(), currentUser.id]);
             await saveDBToIDB();
         }
@@ -1040,6 +1141,8 @@ async function purgeOldCompletedTasks(showConfirm = true) {
         if (!ok) return 0;
     }
     if (count === 0) return 0;
+    const purgeTs = nowISOGMT3();
+    tasks.forEach(t => { if (t.status === 'Completed' && t.endDate <= cutoffStr) tombstones.push({ id: t.id, title: t.title, deletedAt: purgeTs }); });
     tasks = tasks.filter(t => !(t.status === 'Completed' && t.endDate <= cutoffStr));
     saveToStorage();
     render();
