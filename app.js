@@ -3,6 +3,8 @@ let db = null;
 let currentUser = null;
 let tasks = [];
 let tombstones = [];
+let logBaseline = new Map();
+let logBaselineReady = false;
 let activeFilters = new Set();
 let searchQuery = '';
 let editingId = null;
@@ -65,12 +67,99 @@ async function loadDBFromIDB() {
 }
 
 // ─── LOCAL TASK PERSISTENCE (durable cache — survives reload even if Gist is offline) ───
-async function saveLocalState() {
+async function saveLocalState(source = 'sync') {
     if (!db || !currentUser) return;
+    logChanges(source);
     const payload = JSON.stringify({ tasks, tombstones });
     db.run("INSERT OR REPLACE INTO task_store (user_id, data) VALUES (?, ?)", [currentUser.id, payload]);
     await saveDBToIDB();
 }
+
+// ─── TASK CHANGE LOG (audit journal so data lost to a bad reconciliation is recoverable) ───
+function taskSnapshot(t) {
+    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
+}
+function serializeForLog(t) { return JSON.stringify(taskSnapshot(t)); }
+function initLogBaseline() {
+    logBaseline = new Map(tasks.map(t => [t.id, serializeForLog(t)]));
+    logBaselineReady = true;
+}
+function appendTaskLog(op, snap, source) {
+    db.run("INSERT INTO task_log (user_id, ts, op, source, task_id, title, snapshot) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [currentUser.id, nowISOGMT3(), op, source || 'sync', snap.id || '', snap.title || '', JSON.stringify(snap)]);
+}
+// Diff the current task list against the last journaled baseline and record every
+// create / update / delete. Lives inside saveLocalState, so it captures BOTH user
+// edits and reconcile/sync-driven changes — including catastrophic removals, where
+// the deleted task's full snapshot is preserved for recovery.
+function logChanges(source) {
+    if (!db || !currentUser) return;
+    const current = new Map(tasks.map(t => [t.id, serializeForLog(t)]));
+    if (!logBaselineReady) { logBaseline = current; logBaselineReady = true; return; }
+    for (const t of tasks) {
+        const prev = logBaseline.get(t.id);
+        if (prev === undefined) appendTaskLog('create', taskSnapshot(t), source);
+        else if (prev !== current.get(t.id)) appendTaskLog('update', taskSnapshot(t), source);
+    }
+    for (const [id, prevSer] of logBaseline) {
+        if (current.has(id)) continue;
+        let snap; try { snap = JSON.parse(prevSer); } catch (e) { snap = { id }; }
+        appendTaskLog('delete', snap, source);
+    }
+    logBaseline = current;
+}
+function pruneTaskLog() {
+    if (!db || !currentUser) return;
+    try {
+        db.run("DELETE FROM task_log WHERE user_id = ? AND log_id NOT IN (SELECT log_id FROM task_log WHERE user_id = ? ORDER BY log_id DESC LIMIT 2000)", [currentUser.id, currentUser.id]);
+    } catch (e) { console.warn('pruneTaskLog failed:', e.message); }
+}
+function safeParseLog(s) { try { return JSON.parse(s); } catch (e) { return null; } }
+function getTaskLogRows() {
+    if (!db || !currentUser) return [];
+    const res = db.exec("SELECT ts, op, source, task_id, title, snapshot FROM task_log WHERE user_id = ? ORDER BY log_id DESC", [currentUser.id]);
+    if (!res.length || !res[0].values) return [];
+    return res[0].values.map(v => ({ ts: v[0], op: v[1], source: v[2], taskId: v[3], title: v[4], task: safeParseLog(v[5]) }));
+}
+function downloadTaskLog() {
+    const rows = getTaskLogRows();
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `taskflow_log_${todayStrGMT3()}.json`; a.click(); URL.revokeObjectURL(url);
+    if (document.getElementById('syncExportStatus')) showSyncStatus('syncExportStatus', `✓ Log baixado (${rows.length} registro(s)).`, 'success');
+}
+// Console recovery helpers (open DevTools → Console):
+//   listDeletedInLog()              → lista tarefas cujo último evento foi exclusão
+//   recoverTaskFromLog('task_xxx')  → restaura uma tarefa excluída a partir do log
+function listDeletedInLog() {
+    if (!db || !currentUser) return [];
+    const res = db.exec("SELECT op, task_id, snapshot FROM task_log WHERE user_id = ? ORDER BY log_id ASC", [currentUser.id]);
+    const rows = (res.length && res[0].values) ? res[0].values : [];
+    const latest = new Map();
+    for (const [op, taskId, snapshot] of rows) latest.set(taskId, { op, snapshot });
+    const present = new Set(tasks.map(t => t.id));
+    const out = [];
+    for (const [taskId, info] of latest) {
+        if (info.op === 'delete' && !present.has(taskId)) { const s = safeParseLog(info.snapshot); if (s && s.title) out.push(s); }
+    }
+    try { console.table(out.map(s => ({ id: s.id, title: s.title, status: s.status, endDate: s.endDate, modifiedAt: s.modifiedAt }))); } catch (e) { console.log(out); }
+    return out;
+}
+function recoverTaskFromLog(taskId) {
+    if (!db || !currentUser) return null;
+    const res = db.exec("SELECT snapshot FROM task_log WHERE user_id = ? AND task_id = ? ORDER BY log_id DESC LIMIT 1", [currentUser.id, taskId]);
+    if (!res.length || !res[0].values.length) { console.warn('Nenhum registro de log para', taskId); return null; }
+    const snap = safeParseLog(res[0].values[0][0]);
+    if (!snap || !snap.title) { console.warn('Snapshot inválido para', taskId); return null; }
+    const restored = { ...snap, id: genId(), modifiedAt: nowISOGMT3() };
+    tasks.push(restored);
+    // clear any tombstone for this task so the restore survives the next sync
+    tombstones = tombstones.filter(tb => tb.id !== snap.id && (tb.title || '').toLowerCase() !== (snap.title || '').toLowerCase());
+    saveToStorage(); render();
+    console.log('Recuperada:', restored.title);
+    return restored;
+}
+
 function loadLocalState() {
     if (!db || !currentUser) return { tasks: [], tombstones: [] };
     try {
@@ -114,6 +203,16 @@ async function initDatabase() {
     user_id INTEGER PRIMARY KEY,
     data TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+    db.run(`CREATE TABLE IF NOT EXISTS task_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    op TEXT NOT NULL,
+    source TEXT,
+    task_id TEXT,
+    title TEXT,
+    snapshot TEXT
   )`);
     await saveDBToIDB();
 }
@@ -169,6 +268,8 @@ function doLogout() {
     currentUser = null;
     tasks = [];
     tombstones = [];
+    logBaseline = new Map();
+    logBaselineReady = false;
     sessionStorage.removeItem('taskflow_user');
     closeUserDropdown();
     document.getElementById('appContainer').style.display = 'none';
@@ -254,6 +355,7 @@ async function showApp() {
     document.getElementById('appContainer').style.display = 'block';
     updateUserUI();
     await loadTasksFromGist();
+    pruneTaskLog();
     await purgeOldCompletedTasksSilent();
     ganttStartDate = getGanttDefaultStart();
     render();
@@ -262,7 +364,7 @@ async function showApp() {
 
 // ─── COMPATIBILITY WRAPPERS ───
 function saveToStorage() {
-    saveLocalState();
+    saveLocalState('local');
     clearTimeout(saveToStorage._gistTimer);
     saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 2000);
 }
@@ -979,6 +1081,7 @@ async function loadTasksFromGist() {
     const local = loadLocalState();
     tasks = local.tasks;
     tombstones = local.tombstones;
+    initLogBaseline();
     const cfg = loadGistConfig();
     if (!cfg) { gistDataLoaded = true; return; }
     try {
