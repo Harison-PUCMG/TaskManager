@@ -398,6 +398,19 @@ function autoUpdateStatuses() {
     if (changed) saveToStorage();
 }
 
+/**
+ * Reclassifica uma tarefa que estava "Overdue" depois que suas datas mudaram.
+ * Se o novo término ainda é passado, ela permanece atrasada; caso contrário
+ * volta para "In Progress" (já começou) ou "To Do" (começa no futuro).
+ */
+function reconcileStatusAfterDateChange(t, prevStatus) {
+    if (!t || prevStatus !== 'Overdue' || t.status !== 'Overdue') return false;
+    const today = todayGMT3();
+    if (today > dateFromStrGMT3(t.endDate)) return false;
+    t.status = today >= dateFromStrGMT3(t.startDate) ? 'In Progress' : 'To Do';
+    return true;
+}
+
 function getFilteredTasks() {
     return tasks.filter(t => {
         const matchFilter = activeFilters.size === 0 || activeFilters.has(t.status);
@@ -422,7 +435,7 @@ function renderTable() {
     empty.style.display = 'none';
     tbody.innerHTML = filtered.map(t => `
     <tr>
-      <td class="task-title-cell">${esc(t.title)}</td>
+      <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${esc(t.title)}</td>
       <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
       <td><span class="status-badge ${statusClass(t.status)}" onclick="toggleStatusDropdown(event, '${t.id}')"><span class="dot"></span>${t.status}</span></td>
       <td class="date-cell">${formatDate(t.startDate)}</td>
@@ -476,7 +489,7 @@ function renderGantt() {
             const barLeft = startOffset * dayWidth, barWidth = duration * dayWidth;
             const barVisible = (startOffset + duration > 0) && (startOffset < GANTT_DAYS);
 
-            rowsHTML += `<div class="gantt-row"><div class="gantt-row-label"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name" title="${esc(t.title)}">${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
+            rowsHTML += `<div class="gantt-row"><div class="gantt-row-label"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
             days.forEach(d => { rowsHTML += `<div class="gantt-cell ${d.getTime() === today.getTime() ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'weekend' : ''}"></div>`; });
 
             if (barVisible) {
@@ -568,7 +581,7 @@ document.addEventListener('mouseup', e => {
     const dx = Math.abs(e.clientX - dragState.startX);
     if (dx < 3 && dragState.type === 'move') { const task = tasks.find(t => t.id === dragState.taskId); if (task) { task.startDate = dragState.origStartDate; task.endDate = dragState.origEndDate; } dragState.active = false; editTask(dragState.taskId); return; }
     const draggedTask = tasks.find(t => t.id === dragState.taskId);
-    if (draggedTask) draggedTask.modifiedAt = nowISOGMT3();
+    if (draggedTask) { reconcileStatusAfterDateChange(draggedTask, draggedTask.status); draggedTask.modifiedAt = nowISOGMT3(); }
     saveToStorage(); dragState.active = false; render();
 });
 
@@ -645,8 +658,10 @@ function saveTask() {
 
     if (editingId) {
         const t = tasks.find(tk => tk.id === editingId);
+        const prevStatus = t.status;
         t.title = title; t.description = desc; t.status = status;
         t.startDate = startDate; t.endDate = endDate;
+        reconcileStatusAfterDateChange(t, prevStatus);
         t.modifiedAt = nowISOGMT3();
     } else {
         const now = nowISOGMT3();
