@@ -5,7 +5,10 @@ let tasks = [];
 let tombstones = [];
 let logBaseline = new Map();
 let logBaselineReady = false;
-let activeFilters = new Set();
+// Ao abrir, o app mostra o trabalho vivo: Em andamento, A fazer e Atrasadas.
+// "Concluídas" fica desmarcada — quem quiser vê-las clica no filtro (ou em "Todas").
+const DEFAULT_FILTERS = ['In Progress', 'To Do', 'Overdue'];
+let activeFilters = new Set(DEFAULT_FILTERS);
 let searchQuery = '';
 let statusChangeId = null;
 let gistDataLoaded = false;
@@ -76,7 +79,7 @@ async function saveLocalState(source = 'sync') {
 
 // ─── TASK CHANGE LOG (audit journal so data lost to a bad reconciliation is recoverable) ───
 function taskSnapshot(t) {
-    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
+    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), createdAt: t.createdAt, modifiedAt: t.modifiedAt };
 }
 function serializeForLog(t) { return JSON.stringify(taskSnapshot(t)); }
 function initLogBaseline() {
@@ -269,7 +272,7 @@ function doLogout() {
     tombstones = [];
     logBaseline = new Map();
     logBaselineReady = false;
-    activeFilters.clear();
+    activeFilters = new Set(DEFAULT_FILTERS);
     searchQuery = '';
     const searchEl = document.getElementById('searchInput');
     if (searchEl) searchEl.value = '';
@@ -354,6 +357,38 @@ function updateUserUI() {
     document.getElementById('userDropdownEmail').textContent = currentUser.email;
 }
 
+// ─── TEMA (escuro / claro) ───
+// A preferência vive no localStorage (e não no banco) porque a tela de login,
+// anterior a qualquer usuário, também precisa dela. O <head> a aplica antes da
+// primeira pintura; aqui só garantimos o atributo e o rótulo dos botões.
+const THEME_KEY = 'taskflow_theme';
+
+function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+
+function applyTheme(theme) {
+    const t = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) { }
+    updateThemeButtons();
+}
+
+function toggleTheme() { applyTheme(currentTheme() === 'light' ? 'dark' : 'light'); }
+
+function updateThemeButtons() {
+    const label = 'Mudar para o tema ' + (currentTheme() === 'light' ? 'escuro' : 'claro');
+    document.querySelectorAll('.theme-toggle').forEach(b => { b.title = label; b.setAttribute('aria-label', label); });
+}
+
+function initTheme() {
+    let saved = null;
+    try { saved = localStorage.getItem(THEME_KEY); } catch (e) { }
+    document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+    updateThemeButtons();
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTheme);
+else initTheme();
+
 // ─── SHOW APP ───
 async function showApp() {
     document.getElementById('authScreen').style.display = 'none';
@@ -363,6 +398,7 @@ async function showApp() {
     pruneTaskLog();
     await purgeOldCompletedTasksSilent();
     ganttStartDate = getGanttDefaultStart();
+    syncFilterButtons();
     render();
     startGistPolling();
 }
@@ -382,9 +418,94 @@ function scheduleGistPush(delayMs) {
 
 function genId() { return 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5); }
 
+// ─── PRIORIDADE (ordem manual) ───
+// A posição de cada tarefa vive no campo `order`: menor = mais prioritária, mais
+// acima na lista. Usamos passos largos e pontos médios entre vizinhos para que
+// arrastar UMA tarefa altere só ela — renumerar tudo faria toda a lista viajar
+// no sync a cada arrasto.
+const ORDER_STEP = 1000;
+
+function orderValue(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+
+function compareByDate(a, b) {
+    if (a.endDate < b.endDate) return -1; if (a.endDate > b.endDate) return 1;
+    if (a.startDate < b.startDate) return -1; if (a.startDate > b.startDate) return 1;
+    return 0;
+}
+
+// Ordem manual manda; datas só desempatam (e cobrem tarefas ainda sem ordem).
+function compareTasks(a, b) {
+    const ao = orderValue(a.order), bo = orderValue(b.order);
+    if (ao !== null && bo !== null) { if (ao !== bo) return ao - bo; return compareByDate(a, b); }
+    if (ao !== null) return -1;
+    if (bo !== null) return 1;
+    return compareByDate(a, b);
+}
+
+// Tarefas antigas (ou de um dispositivo que ainda não conhecia o campo) não têm
+// ordem: recebem uma agora, seguindo a antiga ordenação por data — assim nada
+// muda de lugar sozinho na primeira abertura depois da atualização.
+function ensureTaskOrder() {
+    const missing = tasks.filter(t => orderValue(t.order) === null);
+    if (missing.length === 0) return false;
+    let max = tasks.reduce((m, t) => { const o = orderValue(t.order); return (o !== null && o > m) ? o : m; }, 0);
+    missing.sort(compareByDate).forEach(t => { max += ORDER_STEP; t.order = max; });
+    return true;
+}
+
+// Tarefa nova nasce no topo: acabou de ser criada, é o que o usuário está olhando.
+function topOrder() {
+    let min = null;
+    for (const t of tasks) { const o = orderValue(t.order); if (o !== null && (min === null || o < min)) min = o; }
+    return (min === null ? 0 : min) - ORDER_STEP;
+}
+
+// Só quando os pontos médios esgotam a folga entre dois vizinhos (muitos arrastos
+// no mesmo ponto) redistribuímos os valores, preservando a ordem visível.
+function renumberOrders() {
+    tasks.slice().sort(compareTasks).forEach((t, i) => { t.order = (i + 1) * ORDER_STEP; });
+}
+
+/** Move `draggedId` para logo antes (after=false) ou logo depois (after=true) de `targetId`. */
+function moveTaskTo(draggedId, targetId, after) {
+    if (!draggedId || !targetId || draggedId === targetId) return false;
+    const dragged = tasks.find(t => t.id === draggedId);
+    if (!dragged) return false;
+    ensureTaskOrder();
+    const rest = tasks.filter(t => t.id !== draggedId).sort(compareTasks);
+    const idx = rest.findIndex(t => t.id === targetId);
+    if (idx === -1) return false;
+    const pos = after ? idx + 1 : idx;
+    const prev = rest[pos - 1], next = rest[pos];
+    if (!prev && !next) return false;
+    if (!prev) dragged.order = orderValue(next.order) - ORDER_STEP;
+    else if (!next) dragged.order = orderValue(prev.order) + ORDER_STEP;
+    else dragged.order = (orderValue(prev.order) + orderValue(next.order)) / 2;
+    dragged.modifiedAt = nowISOGMT3();
+    if (prev && next && Math.abs(orderValue(next.order) - orderValue(prev.order)) < 1) renumberOrders();
+    saveToStorage();
+    render();
+    return true;
+}
+
+/** Um passo para cima (-1) ou para baixo (+1) na lista visível — atalho de teclado. */
+function moveTaskRelative(id, dir) {
+    const list = getFilteredTasks();
+    const i = list.findIndex(t => t.id === id);
+    if (i === -1) return false;
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return false;
+    return moveTaskTo(id, list[j].id, dir > 0);
+}
+
 // ─── RENDER ───
 function render() {
     autoUpdateStatuses();
+    if (ensureTaskOrder()) saveToStorage();
     renderTable();
     renderGantt();
 }
@@ -427,11 +548,7 @@ function getFilteredTasks() {
         const matchFilter = activeFilters.size === 0 || activeFilters.has(t.status);
         const matchSearch = !searchQuery || t.title.toLowerCase().includes(searchQuery.toLowerCase()) || t.description.toLowerCase().includes(searchQuery.toLowerCase());
         return matchFilter && matchSearch;
-    }).sort((a, b) => {
-        if (a.endDate < b.endDate) return -1; if (a.endDate > b.endDate) return 1;
-        if (a.startDate < b.startDate) return -1; if (a.startDate > b.startDate) return 1;
-        return 0;
-    });
+    }).sort(compareTasks);
 }
 
 function statusClass(s) { return { 'Completed': 'status-completed', 'In Progress': 'status-inprogress', 'To Do': 'status-todo', 'Overdue': 'status-overdue' }[s] || 'status-todo'; }
@@ -447,7 +564,7 @@ function isFilteringOrSearching() { return activeFilters.size > 0 || !!searchQue
 // Distingue "ainda não há tarefas" de "os filtros escondem tudo" — sem isso o
 // usuário vê "crie sua primeira tarefa" mesmo tendo 40 tarefas cadastradas.
 function emptyStateHTML() {
-    if (isFilteringOrSearching()) {
+    if (tasks.length > 0 && isFilteringOrSearching()) {
         return `<div class="empty-icon">🔎</div>
       <h3>Nenhuma tarefa corresponde aos filtros</h3>
       <p>Existe${tasks.length === 1 ? '' : 'm'} ${tasks.length} tarefa${tasks.length === 1 ? '' : 's'} cadastrada${tasks.length === 1 ? '' : 's'}, mas nenhuma passa pela busca/filtros atuais.</p>
@@ -488,7 +605,8 @@ function renderTable() {
     }
     empty.style.display = 'none';
     tbody.innerHTML = filtered.map(t => `
-    <tr>
+    <tr data-reorder-id="${t.id}">
+      <td class="drag-cell">${DRAG_HANDLE_HTML}</td>
       <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${esc(t.title)}</td>
       <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
       <td><span class="status-badge ${statusClass(t.status)}" role="button" tabindex="0" title="Clique para alterar o status"
@@ -545,7 +663,7 @@ function renderGantt() {
             const barLeft = startOffset * dayWidth, barWidth = duration * dayWidth;
             const barVisible = (startOffset + duration > 0) && (startOffset < GANTT_DAYS);
 
-            rowsHTML += `<div class="gantt-row"><div class="gantt-row-label"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
+            rowsHTML += `<div class="gantt-row" data-reorder-id="${t.id}"><div class="gantt-row-label">${DRAG_HANDLE_HTML}<span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
             days.forEach(d => { rowsHTML += `<div class="gantt-cell ${d.getTime() === today.getTime() ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'weekend' : ''}"></div>`; });
 
             if (barVisible) {
@@ -639,6 +757,92 @@ document.addEventListener('mouseup', e => {
     const draggedTask = tasks.find(t => t.id === dragState.taskId);
     if (draggedTask) { reconcileStatusAfterDateChange(draggedTask, draggedTask.status); draggedTask.modifiedAt = nowISOGMT3(); }
     saveToStorage(); dragState.active = false; render();
+});
+
+// ─── REORDENAR POR PRIORIDADE (arrastar pelo punho) ───
+// Só o punho arrasta: a linha inteira continua clicável para abrir a tarefa, e o
+// arrasto horizontal das barras do Gantt (que muda datas) segue intocado.
+const DRAG_HANDLE_HTML = '<button type="button" class="drag-handle" draggable="true" title="Arraste para mudar a prioridade (ou use as setas ↑ e ↓ com o punho em foco)" aria-label="Mover tarefa para cima ou para baixo">'
+    + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<line x1="12" y1="4" x2="12" y2="20"/><polyline points="8 7 12 3 16 7"/><polyline points="8 17 12 21 16 17"/></svg></button>';
+
+const reorderDrag = { id: null, rowEl: null, listEl: null, targetEl: null, after: false };
+
+function clearReorderMarks() {
+    document.querySelectorAll('.reorder-before, .reorder-after').forEach(el => el.classList.remove('reorder-before', 'reorder-after'));
+}
+
+function endReorderDrag() {
+    clearReorderMarks();
+    if (reorderDrag.rowEl) reorderDrag.rowEl.classList.remove('reorder-dragging');
+    reorderDrag.id = null; reorderDrag.rowEl = null; reorderDrag.listEl = null; reorderDrag.targetEl = null; reorderDrag.after = false;
+}
+
+function closestEl(target, selector) {
+    return (target && target.closest) ? target.closest(selector) : null;
+}
+
+document.addEventListener('dragstart', e => {
+    const handle = closestEl(e.target, '.drag-handle');
+    if (!handle) return;
+    const row = handle.closest('[data-reorder-id]');
+    if (!row) return;
+    reorderDrag.id = row.dataset.reorderId;
+    reorderDrag.rowEl = row;
+    reorderDrag.listEl = row.closest('[data-reorder-list]');
+    if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', reorderDrag.id); } catch (err) { }
+        if (e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(row, 24, 16);
+    }
+    // Esmaecer a linha só depois que o navegador tirou a "foto" do arrasto.
+    setTimeout(() => { if (reorderDrag.rowEl === row) row.classList.add('reorder-dragging'); }, 0);
+});
+
+document.addEventListener('dragover', e => {
+    if (!reorderDrag.id) return;
+    const row = closestEl(e.target, '[data-reorder-id]');
+    // Tabela e Gantt são listas distintas: nunca se arrasta de uma para a outra.
+    if (!row || row.closest('[data-reorder-list]') !== reorderDrag.listEl) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    if (row.dataset.reorderId === reorderDrag.id) { clearReorderMarks(); reorderDrag.targetEl = null; return; }
+    const r = row.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    if (reorderDrag.targetEl !== row || reorderDrag.after !== after) {
+        clearReorderMarks();
+        row.classList.add(after ? 'reorder-after' : 'reorder-before');
+        reorderDrag.targetEl = row;
+        reorderDrag.after = after;
+    }
+});
+
+document.addEventListener('drop', e => {
+    if (!reorderDrag.id) return;
+    e.preventDefault();
+    const target = reorderDrag.targetEl;
+    const draggedId = reorderDrag.id, after = reorderDrag.after;
+    endReorderDrag();
+    if (target) moveTaskTo(draggedId, target.dataset.reorderId, after);
+});
+
+document.addEventListener('dragend', () => { if (reorderDrag.id) endReorderDrag(); });
+
+// Alternativa sem mouse: com o punho em foco, ↑ / ↓ movem a tarefa uma posição.
+document.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const handle = closestEl(e.target, '.drag-handle');
+    if (!handle) return;
+    const row = handle.closest('[data-reorder-id]');
+    if (!row) return;
+    e.preventDefault();
+    const id = row.dataset.reorderId;
+    const listId = row.closest('[data-reorder-list]') ? row.closest('[data-reorder-list]').id : null;
+    if (!moveTaskRelative(id, e.key === 'ArrowUp' ? -1 : 1)) return;
+    // render() reconstrói as linhas: devolve o foco ao punho da mesma tarefa.
+    const scope = listId ? document.getElementById(listId) : document;
+    const again = scope && scope.querySelector('[data-reorder-id="' + id + '"] .drag-handle');
+    if (again) again.focus();
 });
 
 // ─── FILTERS & SEARCH ───
@@ -897,7 +1101,7 @@ function commitDraft() {
             if (endDate < startDate) { const tmp = startDate; startDate = endDate; endDate = tmp; }
             const created = {
                 id: genId(), title: form.title, description: form.description, status: form.status,
-                startDate, endDate, createdAt: now, modifiedAt: now
+                startDate, endDate, order: topOrder(), createdAt: now, modifiedAt: now
             };
             tasks.push(created);
             draft.taskId = created.id;   // ← vínculo por id: daqui em diante é sempre update
@@ -1170,14 +1374,14 @@ function setImportMode(m) { syncImportMode = m; document.getElementById('importM
 function triggerFileImport() { document.getElementById('csvInput').click(); }
 function showSyncStatus(id, msg, type) { const el = document.getElementById(id); el.textContent = msg; el.className = 'sync-status ' + type; }
 function hideSyncStatus(id) { document.getElementById(id).className = 'sync-status'; }
-function generateSyncExport() { const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt })); const text = JSON.stringify(exportData, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
+function generateSyncExport() { const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), createdAt: t.createdAt, modifiedAt: t.modifiedAt })); const text = JSON.stringify(exportData, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
 function copySyncExport() { const ta = document.getElementById('syncExportText'); if (!ta.value) generateSyncExport(); navigator.clipboard.writeText(ta.value).then(() => { showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }).catch(() => { ta.select(); document.execCommand('copy'); showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }); }
 function downloadSyncExport() { if (!document.getElementById('syncExportText').value) generateSyncExport(); const text = document.getElementById('syncExportText').value; const blob = new Blob([text], { type: 'application/json;charset=utf-8;' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `taskflow_${todayStrGMT3()}.json`; a.click(); URL.revokeObjectURL(url); showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success'); }
 
 function normalizeTasks(arr) {
     const vs = ['Completed', 'In Progress', 'To Do', 'Overdue'];
     const now = nowISOGMT3();
-    return arr.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
+    return arr.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), order: orderValue(t.order), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
 }
 function parseImportedJSON(text) {
     const parsed = JSON.parse(text);
@@ -1203,7 +1407,7 @@ function readGistTombstones(data) {
     return parseTombstonesContent(data.files['taskflow.deleted.json'].content);
 }
 function buildGistFiles() {
-    const taskArr = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
+    const taskArr = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
     return {
         'taskflow.json': { content: JSON.stringify(taskArr, null, 2) },
         'taskflow.deleted.json': { content: JSON.stringify(tombstones, null, 2) }
@@ -1221,6 +1425,7 @@ function mergeTaskLists(incoming) {
             if (incMod > exMod) {
                 ex.status = inc.status; ex.startDate = inc.startDate; ex.endDate = inc.endDate;
                 ex.description = inc.description || ex.description;
+                if (orderValue(inc.order) !== null) ex.order = orderValue(inc.order);
                 ex.modifiedAt = inc.modifiedAt;
                 if (inc.createdAt && (!ex.createdAt || inc.createdAt < ex.createdAt)) ex.createdAt = inc.createdAt;
                 updated++;
@@ -1284,7 +1489,11 @@ function reconcileWithRemote(localTasks, localTombstones, remoteTasks, remoteTom
         if (isDead(chosen)) { removed++; continue; }
         if (!localMatch) added++;
         else if (chosen === rt) updated++;
-        merged.push({ ...chosen });
+        // A cópia vencedora pode vir de um dispositivo que ainda não gravava a
+        // prioridade: nesse caso a ordem local é mantida, e não zerada.
+        const out = { ...chosen };
+        if (orderValue(out.order) === null && localMatch && orderValue(localMatch.order) !== null) out.order = orderValue(localMatch.order);
+        merged.push(out);
     }
 
     // Process local-only tasks (absent from remote) — kept unless explicitly tombstoned
