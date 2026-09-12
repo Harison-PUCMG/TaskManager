@@ -16,6 +16,8 @@
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         var p = localStorage.getItem('taskflow_palette');
         if (/^(indigo|teal|amber|rose|slate)$/.test(p || '')) document.documentElement.setAttribute('data-palette', p);
+        var i = localStorage.getItem('taskflow_intensity');
+        if (/^[1-5]$/.test(i || '')) document.documentElement.setAttribute('data-intensity', i);
       } catch (e) { }
     })();
   </script>
@@ -60,22 +62,37 @@
     :root[data-theme="light"][data-palette="rose"],   :root[data-theme="light"] .pal-rose   { --accent: #be185d; --accent-hover: #9d174d; --accent-2: #7e22ce; --on-accent: #fff; }
     :root[data-theme="light"][data-palette="slate"],  :root[data-theme="light"] .pal-slate  { --accent: #475569; --accent-hover: #334155; --accent-2: #64748b; --on-accent: #fff; }
 
+    /* ── INTENSIDADE DA TINTURA ─────────────────────────────────────────
+       Nível 1 é a tintura mais fraca (o padrão); 5, a mais forte. No escuro
+       basta saturar o neutro. No claro é preciso escurecer junto: a 95% de luz
+       o matiz se lava por mais saturado que esteja, então --tint-drop desce a
+       luminosidade do fundo e das bordas conforme o slider avança. ── */
+    :root                     { --tint-mul: 1;   --tint-drop: 0%; }
+    :root[data-intensity="2"] { --tint-mul: 1.3; --tint-drop: 1.6%; }
+    :root[data-intensity="3"] { --tint-mul: 1.6; --tint-drop: 3.2%; }
+    :root[data-intensity="4"] { --tint-mul: 1.9; --tint-drop: 5%; }
+    :root[data-intensity="5"] { --tint-mul: 2.2; --tint-drop: 7%; }
+    /* saturação do neutro já com a intensidade aplicada */
+    :root { --tint-sat: calc(var(--tint-s) * var(--tint-mul)); }
+
     /* ── TEMA ESCURO (padrão) — tons suavizados: menos contraste duro,
        superfícies mais claras e texto menos estourado. ── */
     :root {
       color-scheme: dark;
-      --bg:               hsl(var(--tint-h) var(--tint-s) 10.5%);
-      --surface:          hsl(var(--tint-h) var(--tint-s) 14%);
-      --surface-hover:    hsl(var(--tint-h) var(--tint-s) 17.5%);
-      --surface-elevated: hsl(var(--tint-h) var(--tint-s) 20%);
-      --border:           hsl(var(--tint-h) var(--tint-s) 23%);
-      --border-light:     hsl(var(--tint-h) var(--tint-s) 29%);
+      --bg:               hsl(var(--tint-h) var(--tint-sat) 10.5%);
+      --surface:          hsl(var(--tint-h) var(--tint-sat) 14%);
+      --surface-hover:    hsl(var(--tint-h) var(--tint-sat) 17.5%);
+      --surface-elevated: hsl(var(--tint-h) var(--tint-sat) 20%);
+      --border:           hsl(var(--tint-h) var(--tint-sat) 23%);
+      --border-light:     hsl(var(--tint-h) var(--tint-sat) 29%);
       /* Luminosidades calibradas pelo matiz mais crítico (teal e âmbar rendem
          mais luz que azul na mesma % de hsl), para nenhuma paleta ficar com
          contraste pior que o tema original. */
-      --text:             hsl(var(--tint-h) calc(var(--tint-s) * 0.8) 88.5%);
-      --text-muted:       hsl(var(--tint-h) calc(var(--tint-s) * 0.5) 63%);
-      --text-dim:         hsl(var(--tint-h) calc(var(--tint-s) * 0.45) 52%);
+      --text:             hsl(var(--tint-h) calc(var(--tint-sat) * 0.8) 88.5%);
+      /* Subir a saturação escurece o tom; o texto secundário clareia junto para
+         não perder contraste conforme o slider avança. */
+      --text-muted:       hsl(var(--tint-h) calc(var(--tint-sat) * 0.5) calc(63% + var(--tint-drop) * 0.4));
+      --text-dim:         hsl(var(--tint-h) calc(var(--tint-sat) * 0.45) calc(52% + var(--tint-drop) * 0.55));
       --completed: #3ecf7f;
       --completed-bg: rgba(62, 207, 127, 0.13);
       --completed-border: rgba(62, 207, 127, 0.26);
@@ -104,15 +121,15 @@
     /* ── TEMA CLARO ── */
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg:               hsl(var(--tint-h) calc(var(--tint-s) + 26%) 95.2%);
+      --bg:               hsl(var(--tint-h) calc((var(--tint-s) + 26%) * var(--tint-mul)) calc(95.2% - var(--tint-drop)));
       --surface:          #ffffff;
-      --surface-hover:    hsl(var(--tint-h) calc(var(--tint-s) + 22%) 92.6%);
+      --surface-hover:    hsl(var(--tint-h) calc((var(--tint-s) + 22%) * var(--tint-mul)) calc(92.6% - var(--tint-drop)));
       --surface-elevated: #ffffff;
-      --border:           hsl(var(--tint-h) calc(var(--tint-s) * 0.8) 90.5%);
-      --border-light:     hsl(var(--tint-h) calc(var(--tint-s) * 0.75) 82%);
-      --text:             hsl(var(--tint-h) calc(var(--tint-s) * 0.85) 13.5%);
-      --text-muted:       hsl(var(--tint-h) calc(var(--tint-s) * 0.5) 38%);
-      --text-dim:         hsl(var(--tint-h) calc(var(--tint-s) * 0.4) 44%);
+      --border:           hsl(var(--tint-h) calc(var(--tint-sat) * 0.8) calc(90.5% - var(--tint-drop)));
+      --border-light:     hsl(var(--tint-h) calc(var(--tint-sat) * 0.75) calc(82% - var(--tint-drop)));
+      --text:             hsl(var(--tint-h) calc(var(--tint-sat) * 0.85) 13.5%);
+      --text-muted:       hsl(var(--tint-h) calc(var(--tint-sat) * 0.5) calc(38% - var(--tint-drop) * 0.45));
+      --text-dim:         hsl(var(--tint-h) calc(var(--tint-sat) * 0.4) calc(44% - var(--tint-drop) * 0.5));
       --completed: #15803d;
       --completed-bg: rgba(22, 163, 74, 0.10);
       --completed-border: rgba(22, 163, 74, 0.28);
@@ -914,6 +931,16 @@
     .palette-check svg { width: 14px; height: 14px; display: block; }
     .palette-swatch[aria-checked="true"] { background: var(--surface-hover); }
     .palette-swatch[aria-checked="true"] .palette-check { opacity: 1; }
+    .palette-divider { height: 1px; background: var(--border); margin: 8px 4px; }
+    .palette-intensity-row { display: block; padding: 0 10px 4px; }
+    .palette-intensity-label {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.4px;
+      text-transform: uppercase; color: var(--text-dim); margin-bottom: 7px;
+    }
+    .palette-intensity-label b { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .palette-range { width: 100%; margin: 0; height: 16px; cursor: pointer; accent-color: var(--accent); }
+    .palette-range:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 3px; }
 
     /* -- PRIORIDADE: REORDENACAO POR ARRASTO ------------------- */
     .task-table td.drag-cell { width: 34px; padding: 14px 2px 14px 12px; }
@@ -988,6 +1015,7 @@
         <div class="palette-menu" role="menu" aria-label="Cor do tema">
           <div class="palette-menu-title">Cor do tema</div>
           <div class="palette-grid"></div>
+          <div class="palette-intensity"></div>
         </div>
       </div>
     </div>
@@ -1043,6 +1071,7 @@
           <div class="palette-menu" role="menu" aria-label="Cor do tema">
             <div class="palette-menu-title">Cor do tema</div>
             <div class="palette-grid"></div>
+            <div class="palette-intensity"></div>
           </div>
         </div>
         <button class="btn" onclick="openSyncModal('gist')" title="Sincronizar">

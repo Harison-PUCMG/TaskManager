@@ -364,6 +364,7 @@ function updateUserUI() {
 // Modo e paleta são independentes: cada paleta existe em claro e em escuro.
 const THEME_KEY = 'taskflow_theme';
 const PALETTE_KEY = 'taskflow_palette';
+const INTENSITY_KEY = 'taskflow_intensity';
 
 // Os tons de cada paleta ficam no CSS (blocos [data-palette] e .pal-*); aqui
 // só o que a interface precisa nomear. Uma paleta nova custa uma linha nesta
@@ -409,6 +410,30 @@ function applyPalette(id) {
     closePaletteMenus();
 }
 
+// Intensidade da tintura do fundo: 1 é a mais fraca (padrão), 5 a mais forte.
+// Os tons ficam no CSS (blocos [data-intensity]); aqui só os limites do slider.
+const INTENSITY_MIN = 1, INTENSITY_MAX = 5, DEFAULT_INTENSITY = 1;
+
+function currentIntensity() {
+    const n = parseInt(document.documentElement.getAttribute('data-intensity'), 10);
+    return (n >= INTENSITY_MIN && n <= INTENSITY_MAX) ? n : DEFAULT_INTENSITY;
+}
+
+function applyIntensity(value) {
+    let n = parseInt(value, 10);
+    if (!(n >= INTENSITY_MIN && n <= INTENSITY_MAX)) n = DEFAULT_INTENSITY;
+    document.documentElement.setAttribute('data-intensity', String(n));
+    try { localStorage.setItem(INTENSITY_KEY, String(n)); } catch (e) { }
+    updateIntensityControls();
+}
+
+// Os dois menus compartilham o mesmo valor, então um slider espelha o outro.
+function updateIntensityControls() {
+    const n = currentIntensity();
+    document.querySelectorAll('.palette-range').forEach(r => { if (r.value !== String(n)) r.value = n; });
+    document.querySelectorAll('.palette-intensity-val').forEach(v => { v.textContent = n; });
+}
+
 // O mostruário aparece em dois lugares (cabeçalho do app e tela de login), daí
 // montá-lo por código em vez de repetir cinco botões no HTML duas vezes.
 function renderPaletteMenus() {
@@ -418,7 +443,16 @@ function renderPaletteMenus() {
         `<span class="palette-dot"></span><span>${p.name}</span>${check}</button>`
     ).join('');
     document.querySelectorAll('.palette-grid').forEach(g => { g.innerHTML = html; });
+
+    const slider = '<div class="palette-divider"></div>' +
+        '<label class="palette-intensity-row" onclick="event.stopPropagation()">' +
+        '<span class="palette-intensity-label">Intensidade <b class="palette-intensity-val">1</b></span>' +
+        `<input type="range" class="palette-range" min="${INTENSITY_MIN}" max="${INTENSITY_MAX}" step="1"` +
+        ' oninput="applyIntensity(this.value)" aria-label="Intensidade da cor de fundo"></label>';
+    document.querySelectorAll('.palette-intensity').forEach(c => { c.innerHTML = slider; });
+
     updatePaletteButtons();
+    updateIntensityControls();
 }
 
 function updatePaletteButtons() {
@@ -449,13 +483,17 @@ function closePaletteMenus() {
 }
 
 function initTheme() {
-    let savedTheme = null, savedPalette = null;
+    let savedTheme = null, savedPalette = null, savedIntensity = null;
     try {
         savedTheme = localStorage.getItem(THEME_KEY);
         savedPalette = localStorage.getItem(PALETTE_KEY);
+        savedIntensity = localStorage.getItem(INTENSITY_KEY);
     } catch (e) { }
     document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark');
     document.documentElement.setAttribute('data-palette', isPalette(savedPalette) ? savedPalette : DEFAULT_PALETTE);
+    const n = parseInt(savedIntensity, 10);
+    document.documentElement.setAttribute('data-intensity',
+        String((n >= INTENSITY_MIN && n <= INTENSITY_MAX) ? n : DEFAULT_INTENSITY));
     updateThemeButtons();
     renderPaletteMenus();
 }
