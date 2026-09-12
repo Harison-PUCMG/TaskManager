@@ -46,11 +46,11 @@
 
     /* Paletas — modo escuro */
     :root,
-    :root[data-palette="indigo"], .pal-indigo { --tint-h: 226; --tint-s: 18%; --accent: #6b6fe0; --accent-hover: #8b91ee; --accent-2: #a855f7; --on-accent: #fff; }
-    :root[data-palette="teal"],   .pal-teal   { --tint-h: 193; --tint-s: 13%; --accent: #14b8a6; --accent-hover: #2dd4bf; --accent-2: #0ea5e9; --on-accent: #04211e; }
-    :root[data-palette="amber"],  .pal-amber  { --tint-h: 34;  --tint-s: 12%; --accent: #e0a33f; --accent-hover: #f3bb61; --accent-2: #f97316; --on-accent: #2a1c02; }
-    :root[data-palette="rose"],   .pal-rose   { --tint-h: 330; --tint-s: 12%; --accent: #db2777; --accent-hover: #ee5fa7; --accent-2: #a855f7; --on-accent: #fff; }
-    :root[data-palette="slate"],  .pal-slate  { --tint-h: 220; --tint-s: 8%;  --accent: #5b6a80; --accent-hover: #7e8ea6; --accent-2: #475569; --on-accent: #fff; }
+    :root[data-palette="indigo"], .pal-indigo { --tint-h: 232; --tint-s: 26%; --accent: #6b6fe0; --accent-hover: #8b91ee; --accent-2: #a855f7; --on-accent: #fff; }
+    :root[data-palette="teal"],   .pal-teal   { --tint-h: 182; --tint-s: 24%; --accent: #14b8a6; --accent-hover: #2dd4bf; --accent-2: #0ea5e9; --on-accent: #04211e; }
+    :root[data-palette="amber"],  .pal-amber  { --tint-h: 32;  --tint-s: 24%; --accent: #e0a33f; --accent-hover: #f3bb61; --accent-2: #f97316; --on-accent: #2a1c02; }
+    :root[data-palette="rose"],   .pal-rose   { --tint-h: 336; --tint-s: 22%; --accent: #db2777; --accent-hover: #ee5fa7; --accent-2: #a855f7; --on-accent: #fff; }
+    :root[data-palette="slate"],  .pal-slate  { --tint-h: 218; --tint-s: 14%; --accent: #5b6a80; --accent-hover: #7e8ea6; --accent-2: #475569; --on-accent: #fff; }
 
     /* Paletas — modo claro (o matiz do neutro vem do bloco escuro acima) */
     :root[data-theme="light"],
@@ -70,9 +70,12 @@
       --surface-elevated: hsl(var(--tint-h) var(--tint-s) 20%);
       --border:           hsl(var(--tint-h) var(--tint-s) 23%);
       --border-light:     hsl(var(--tint-h) var(--tint-s) 29%);
-      --text: #dcdfe7;
-      --text-muted: #959aac;
-      --text-dim: #757c90;
+      /* Luminosidades calibradas pelo matiz mais crítico (teal e âmbar rendem
+         mais luz que azul na mesma % de hsl), para nenhuma paleta ficar com
+         contraste pior que o tema original. */
+      --text:             hsl(var(--tint-h) calc(var(--tint-s) * 0.8) 88.5%);
+      --text-muted:       hsl(var(--tint-h) calc(var(--tint-s) * 0.5) 63%);
+      --text-dim:         hsl(var(--tint-h) calc(var(--tint-s) * 0.45) 52%);
       --completed: #3ecf7f;
       --completed-bg: rgba(62, 207, 127, 0.13);
       --completed-border: rgba(62, 207, 127, 0.26);
@@ -101,15 +104,15 @@
     /* ── TEMA CLARO ── */
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg:               hsl(var(--tint-h) calc(var(--tint-s) + 6%) 96.9%);
+      --bg:               hsl(var(--tint-h) calc(var(--tint-s) + 26%) 95.2%);
       --surface:          #ffffff;
-      --surface-hover:    hsl(var(--tint-h) calc(var(--tint-s) + 6%) 94.3%);
+      --surface-hover:    hsl(var(--tint-h) calc(var(--tint-s) + 22%) 92.6%);
       --surface-elevated: #ffffff;
-      --border:           hsl(var(--tint-h) calc(var(--tint-s) + 4%) 91%);
-      --border-light:     hsl(var(--tint-h) calc(var(--tint-s) + 2%) 82.5%);
-      --text: #1b1f2a;
-      --text-muted: #596074;
-      --text-dim: #6f7689;
+      --border:           hsl(var(--tint-h) calc(var(--tint-s) * 0.8) 90.5%);
+      --border-light:     hsl(var(--tint-h) calc(var(--tint-s) * 0.75) 82%);
+      --text:             hsl(var(--tint-h) calc(var(--tint-s) * 0.85) 13.5%);
+      --text-muted:       hsl(var(--tint-h) calc(var(--tint-s) * 0.5) 38%);
+      --text-dim:         hsl(var(--tint-h) calc(var(--tint-s) * 0.4) 44%);
       --completed: #15803d;
       --completed-bg: rgba(22, 163, 74, 0.10);
       --completed-border: rgba(22, 163, 74, 0.28);
