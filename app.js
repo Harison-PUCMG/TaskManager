@@ -446,22 +446,39 @@ function compareTasks(a, b) {
     return compareByDate(a, b);
 }
 
-// Tarefas antigas (ou de um dispositivo que ainda não conhecia o campo) não têm
-// ordem: recebem uma agora, seguindo a antiga ordenação por data — assim nada
-// muda de lugar sozinho na primeira abertura depois da atualização.
-function ensureTaskOrder() {
-    const missing = tasks.filter(t => orderValue(t.order) === null);
-    if (missing.length === 0) return false;
-    let max = tasks.reduce((m, t) => { const o = orderValue(t.order); return (o !== null && o > m) ? o : m; }, 0);
-    missing.sort(compareByDate).forEach(t => { max += ORDER_STEP; t.order = max; });
-    return true;
+// A REGRA PADRÃO DE ENTRADA é a data de término: a tarefa entra logo abaixo da
+// última que NÃO termina depois dela. Numa lista ainda em ordem de data isso dá
+// exatamente a posição da data; numa lista já reordenada à mão, evita que uma
+// tarefa nova salte por cima das que foram priorizadas manualmente.
+// `list` está na ordem em que aparece na tela.
+function dateSlot(list, t) {
+    let i = list.length;
+    while (i > 0 && compareByDate(list[i - 1], t) > 0) i--;
+    return i;
 }
 
-// Tarefa nova nasce no topo: acabou de ser criada, é o que o usuário está olhando.
-function topOrder() {
-    let min = null;
-    for (const t of tasks) { const o = orderValue(t.order); if (o !== null && (min === null || o < min)) min = o; }
-    return (min === null ? 0 : min) - ORDER_STEP;
+// Toda tarefa que ainda não tem posição — recém-criada, antiga (anterior a este
+// campo) ou vinda de um dispositivo que não gravava ordem — entra pela regra da
+// data. Depois disso a posição só muda se o usuário arrastar: a ordenação manual
+// tem precedência sobre a padrão.
+function ensureTaskOrder() {
+    const pending = tasks.filter(t => orderValue(t.order) === null);
+    if (pending.length === 0) return false;
+    const placed = tasks.filter(t => orderValue(t.order) !== null).sort(compareTasks);
+    pending.sort(compareByDate).forEach(t => {
+        const i = dateSlot(placed, t);
+        const prev = placed[i - 1], next = placed[i];
+        if (!prev && !next) t.order = ORDER_STEP;
+        else if (!prev) t.order = orderValue(next.order) - ORDER_STEP;
+        else if (!next) t.order = orderValue(prev.order) + ORDER_STEP;
+        else t.order = (orderValue(prev.order) + orderValue(next.order)) / 2;
+        placed.splice(i, 0, t);
+    });
+    // Folga esgotada entre dois vizinhos: redistribui preservando a ordem visível.
+    for (let i = 1; i < placed.length; i++) {
+        if (Math.abs(orderValue(placed[i].order) - orderValue(placed[i - 1].order)) < 1) { renumberOrders(); break; }
+    }
+    return true;
 }
 
 // Só quando os pontos médios esgotam a folga entre dois vizinhos (muitos arrastos
@@ -1101,9 +1118,10 @@ function commitDraft() {
             if (endDate < startDate) { const tmp = startDate; startDate = endDate; endDate = tmp; }
             const created = {
                 id: genId(), title: form.title, description: form.description, status: form.status,
-                startDate, endDate, order: topOrder(), createdAt: now, modifiedAt: now
+                startDate, endDate, order: null, createdAt: now, modifiedAt: now
             };
             tasks.push(created);
+            ensureTaskOrder();   // posiciona pela data de término, sem esperar o render
             draft.taskId = created.id;   // ← vínculo por id: daqui em diante é sempre update
             draft.createdHere = true;
         }
