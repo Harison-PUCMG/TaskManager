@@ -7,7 +7,6 @@ let logBaseline = new Map();
 let logBaselineReady = false;
 let activeFilters = new Set();
 let searchQuery = '';
-let editingId = null;
 let statusChangeId = null;
 let gistDataLoaded = false;
 let ganttStartDate = null;
@@ -270,6 +269,12 @@ function doLogout() {
     tombstones = [];
     logBaseline = new Map();
     logBaselineReady = false;
+    activeFilters.clear();
+    searchQuery = '';
+    const searchEl = document.getElementById('searchInput');
+    if (searchEl) searchEl.value = '';
+    syncFilterButtons();
+    hideActionToast();
     sessionStorage.removeItem('taskflow_user');
     closeUserDropdown();
     document.getElementById('appContainer').style.display = 'none';
@@ -363,10 +368,16 @@ async function showApp() {
 }
 
 // ─── COMPATIBILITY WRAPPERS ───
-function saveToStorage() {
+// gistDelayMs adia o push ao Gist: durante a digitação no modal usamos um atraso
+// maior, para não publicar títulos pela metade (e não gastar chamadas de API).
+function saveToStorage(gistDelayMs) {
     saveLocalState('local');
+    scheduleGistPush(typeof gistDelayMs === 'number' ? gistDelayMs : 2000);
+}
+
+function scheduleGistPush(delayMs) {
     clearTimeout(saveToStorage._gistTimer);
-    saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), 2000);
+    saveToStorage._gistTimer = setTimeout(() => silentPushToGist(), delayMs);
 }
 
 function genId() { return 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5); }
@@ -424,20 +435,65 @@ function getFilteredTasks() {
 }
 
 function statusClass(s) { return { 'Completed': 'status-completed', 'In Progress': 'status-inprogress', 'To Do': 'status-todo', 'Overdue': 'status-overdue' }[s] || 'status-todo'; }
+// Só de apresentação: o status gravado/sincronizado permanece em inglês, para não
+// quebrar os JSONs já existentes no Gist nem os exports antigos.
+const STATUS_LABELS = { 'To Do': 'A fazer', 'In Progress': 'Em andamento', 'Completed': 'Concluída', 'Overdue': 'Atrasada' };
+function statusLabel(s) { return STATUS_LABELS[s] || s; }
 function statusKey(s) { return { 'Completed': 'completed', 'In Progress': 'inprogress', 'To Do': 'todo', 'Overdue': 'overdue' }[s] || 'todo'; }
 function formatDate(d) { if (!d) return '—'; const [y, m, dd] = d.split('-'); return `${dd}/${m}/${y}`; }
+
+function isFilteringOrSearching() { return activeFilters.size > 0 || !!searchQuery.trim(); }
+
+// Distingue "ainda não há tarefas" de "os filtros escondem tudo" — sem isso o
+// usuário vê "crie sua primeira tarefa" mesmo tendo 40 tarefas cadastradas.
+function emptyStateHTML() {
+    if (isFilteringOrSearching()) {
+        return `<div class="empty-icon">🔎</div>
+      <h3>Nenhuma tarefa corresponde aos filtros</h3>
+      <p>Existe${tasks.length === 1 ? '' : 'm'} ${tasks.length} tarefa${tasks.length === 1 ? '' : 's'} cadastrada${tasks.length === 1 ? '' : 's'}, mas nenhuma passa pela busca/filtros atuais.</p>
+      <div class="empty-actions">
+        <button class="btn" onclick="clearFiltersAndSearch()">Limpar filtros e busca</button>
+      </div>`;
+    }
+    return `<div class="empty-icon">📋</div>
+      <h3>Nenhuma tarefa por aqui</h3>
+      <p>Crie a primeira tarefa — ela é salva sozinha assim que você digitar um título.</p>
+      <div class="empty-actions">
+        <button class="btn btn-primary" onclick="openModal()">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>Nova tarefa
+        </button>
+      </div>`;
+}
+
+function clearFiltersAndSearch() {
+    activeFilters.clear();
+    searchQuery = '';
+    const si = document.getElementById('searchInput');
+    if (si) si.value = '';
+    syncFilterButtons();
+    render();
+}
 
 function renderTable() {
     const filtered = getFilteredTasks();
     const tbody = document.getElementById('taskTableBody');
     const empty = document.getElementById('emptyState');
-    if (filtered.length === 0) { tbody.innerHTML = ''; empty.style.display = 'block'; return; }
+    if (filtered.length === 0) {
+        tbody.innerHTML = '';
+        empty.innerHTML = emptyStateHTML();
+        empty.style.display = 'block';
+        return;
+    }
     empty.style.display = 'none';
     tbody.innerHTML = filtered.map(t => `
     <tr>
       <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${esc(t.title)}</td>
       <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
-      <td><span class="status-badge ${statusClass(t.status)}" onclick="toggleStatusDropdown(event, '${t.id}')"><span class="dot"></span>${t.status}</span></td>
+      <td><span class="status-badge ${statusClass(t.status)}" role="button" tabindex="0" title="Clique para alterar o status"
+            onclick="toggleStatusDropdown(event, '${t.id}')"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleStatusDropdown(event,'${t.id}')}"><span class="dot"></span>${statusLabel(t.status)}</span></td>
       <td class="date-cell">${formatDate(t.startDate)}</td>
       <td class="date-cell">${formatDate(t.endDate)}</td>
       <td><div class="action-btns">
@@ -476,7 +532,7 @@ function renderGantt() {
 
     let rowsHTML = '';
     if (filtered.length === 0) {
-        rowsHTML = `<div class="empty-state" style="padding:40px"><h3>Nenhuma tarefa para exibir</h3></div>`;
+        rowsHTML = `<div class="empty-state" style="padding:40px">${emptyStateHTML()}</div>`;
     } else {
         filtered.forEach(t => {
             const sk = statusKey(t.status);
@@ -521,7 +577,7 @@ function showTooltip(e, id) {
     } else {
         document.getElementById('ttDesc').textContent = t.description || 'Sem descrição';
     }
-    document.getElementById('ttDates').textContent = `${formatDate(t.startDate)} → ${formatDate(t.endDate)} · ${t.status}`;
+    document.getElementById('ttDates').textContent = `${formatDate(t.startDate)} → ${formatDate(t.endDate)} · ${statusLabel(t.status)}`;
     tt.classList.add('show'); positionTooltip(e);
 }
 function hideTooltip() { document.getElementById('ganttTooltip').classList.remove('show'); }
@@ -586,12 +642,24 @@ document.addEventListener('mouseup', e => {
 });
 
 // ─── FILTERS & SEARCH ───
-function toggleFilter(filter, btn) {
-    const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
-    const statusBtns = document.querySelectorAll('.filter-btn:not([data-filter="all"])');
-    if (filter === 'all') { activeFilters.clear(); statusBtns.forEach(b => b.classList.remove('active')); allBtn.classList.add('active'); }
-    else { allBtn.classList.remove('active'); if (activeFilters.has(filter)) { activeFilters.delete(filter); btn.classList.remove('active'); } else { activeFilters.add(filter); btn.classList.add('active'); } if (activeFilters.size === 0) allBtn.classList.add('active'); if (activeFilters.size === 4) { activeFilters.clear(); statusBtns.forEach(b => b.classList.remove('active')); allBtn.classList.add('active'); } }
+function toggleFilter(filter) {
+    if (filter === 'all') activeFilters.clear();
+    else if (activeFilters.has(filter)) activeFilters.delete(filter);
+    else activeFilters.add(filter);
+    // Tudo marcado equivale a nenhum filtro — volta para "Todas".
+    if (activeFilters.size === 4) activeFilters.clear();
+    syncFilterButtons();
     render();
+}
+
+// Uma única fonte da verdade para o visual dos filtros (classe + aria-pressed).
+function syncFilterButtons() {
+    document.querySelectorAll('.filter-btn').forEach(b => {
+        const f = b.dataset.filter;
+        const on = f === 'all' ? activeFilters.size === 0 : activeFilters.has(f);
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
 }
 function searchTasks(q) { searchQuery = q; render(); }
 
@@ -603,80 +671,464 @@ function switchView(view, btn) {
     if (view === 'gantt') renderGantt();
 }
 
-// ─── TASK MODAL ───
+// ─── TASK MODAL — SALVAMENTO AUTOMÁTICO ───
+// Não existe mais botão "Criar Tarefa": depois de uma pausa na digitação a tarefa
+// é gravada sozinha, assim que houver um título.
+//
+// O ponto delicado é o RENOMEAR: quem digita devagar faz a primeira gravação
+// acontecer com um título pela metade ("Reuni"), e o título final ("Reunião de
+// planejamento") chega depois. Por isso a PRIMEIRA gravação cria a tarefa e guarda
+// o id em draft.taskId; toda gravação seguinte procura a tarefa POR ID e apenas
+// atualiza os campos. Renomear vira update, nunca um segundo registro — e como o
+// id não muda, a reconciliação com o Gist casa por id e não duplica nada.
+const DRAFT_DEBOUNCE_MS = 700;    // pausa na digitação que dispara a gravação
+const DRAFT_GIST_DELAY_MS = 6000; // enquanto se edita, o push ao Gist fica adiado
+
+const draft = {
+    open: false,        // modal de tarefa aberto
+    taskId: null,       // id ao qual este rascunho está vinculado (null = ainda não gravado)
+    createdHere: false, // a tarefa nasceu nesta sessão do modal (habilita "Descartar")
+    committing: false,  // trava de reentrância: impede duas criações simultâneas
+    wrote: false,       // gravou algo desde que o modal abriu
+    original: null,     // estado da tarefa ao abrir o modal (habilita "Reverter")
+    timer: null,
+    lastSavedAt: null
+};
+
+function resetDraftState() {
+    clearTimeout(draft.timer);
+    draft.timer = null;
+    draft.open = false;
+    draft.taskId = null;
+    draft.createdHere = false;
+    draft.committing = false;
+    draft.wrote = false;
+    draft.original = null;
+}
+
 function openModal(taskId) {
-    editingId = taskId || null;
+    const existing = taskId ? tasks.find(t => t.id === taskId) : null;
+
+    resetDraftState();
+    draft.open = true;
+    draft.taskId = existing ? existing.id : null;
+    draft.lastSavedAt = null;
+
     const modal = document.getElementById('taskModal');
     modal.classList.add('show');
 
-    // Oculta o aviso de inversão de datas
     const notice = document.getElementById('dateSwapNotice');
     if (notice) notice.classList.remove('show');
 
-    if (editingId) {
-        const t = tasks.find(tk => tk.id === editingId);
-        document.getElementById('modalTitle').textContent = 'Editar Tarefa';
-        document.getElementById('saveBtn').textContent = 'Salvar Alterações';
-        document.getElementById('taskTitle').value = t.title;
-        document.getElementById('taskDesc').value = t.description;
-        // Usa a função global setTaskStatus (definida no HTML)
-        if (window.setTaskStatus) window.setTaskStatus(t.status);
-        document.getElementById('taskStart').value = t.startDate;
-        document.getElementById('taskEnd').value = t.endDate;
+    if (existing) {
+        // Com o autosave não há mais "Cancelar": guardamos o estado de entrada para
+        // que o usuário possa reverter a edição inteira em um clique.
+        draft.original = taskSnapshot(existing);
+        document.getElementById('modalTitle').textContent = 'Editar tarefa';
+        document.getElementById('taskTitle').value = existing.title;
+        document.getElementById('taskDesc').value = existing.description;
+        if (window.setTaskStatus) window.setTaskStatus(existing.status, true);
+        document.getElementById('taskStart').value = existing.startDate;
+        document.getElementById('taskEnd').value = existing.endDate;
+        setAutosaveState('saved-idle');
     } else {
-        document.getElementById('modalTitle').textContent = 'Nova Tarefa';
-        document.getElementById('saveBtn').textContent = 'Criar Tarefa';
+        document.getElementById('modalTitle').textContent = 'Nova tarefa';
         document.getElementById('taskTitle').value = '';
         document.getElementById('taskDesc').value = '';
-        if (window.setTaskStatus) window.setTaskStatus('To Do');
+        if (window.setTaskStatus) window.setTaskStatus('To Do', true);
         const td = todayStrGMT3();
         document.getElementById('taskStart').value = td;
         document.getElementById('taskEnd').value = td;
+        setAutosaveState('awaiting-title');
     }
+    updateTitleHint();
+    updateDraftChrome();
     setTimeout(() => document.getElementById('taskTitle').focus(), 100);
 }
-function closeModal() { document.getElementById('taskModal').classList.remove('show'); editingId = null; }
 
-function saveTask() {
-    const title = document.getElementById('taskTitle').value.trim();
-    const desc  = document.getElementById('taskDesc').value.trim();
-    // Lê o status do campo hidden (mantido em sincronia pelos botões)
-    const status    = document.getElementById('taskStatus').value || 'To Do';
-    let   startDate = document.getElementById('taskStart').value;
-    let   endDate   = document.getElementById('taskEnd').value;
+function closeModal() {
+    if (draft.open) commitDraft();
+    const pushNow = draft.wrote;
+    const createdId = (draft.open && draft.createdHere) ? draft.taskId : null;
+    resetDraftState();
+    document.getElementById('taskModal').classList.remove('show');
+    const hint = document.getElementById('taskTitleHint');
+    if (hint) { hint.className = 'field-hint'; hint.textContent = ''; }
+    const titleEl = document.getElementById('taskTitle');
+    if (titleEl) titleEl.classList.remove('invalid');
+    // Edição encerrada: antecipa o envio ao Gist, que ficou adiado durante a digitação.
+    // O autosave gera um evento de journal por pausa na digitação, então a poda —
+    // antes só no login — passa a rodar também aqui, ao fim de cada edição.
+    if (pushNow) { pruneTaskLog(); scheduleGistPush(1200); }
 
-    if (!title) { document.getElementById('taskTitle').focus(); return; }
-    if (!startDate || !endDate) return;
+    // A tarefa foi salva, mas os filtros ativos a escondem: sem este aviso o
+    // usuário conclui que o salvamento automático falhou.
+    if (createdId && !getFilteredTasks().some(t => t.id === createdId)) {
+        showActionToast('Tarefa salva, mas escondida pelos filtros atuais.', 'Limpar filtros', clearFiltersAndSearch);
+    }
+}
 
-    // Garante inversão caso o app.js seja chamado com datas já trocadas
-    // (a inversão visual já ocorre via handleDateInput, mas protegemos aqui tb)
-    if (endDate < startDate) {
-        [startDate, endDate] = [endDate, startDate];
-        document.getElementById('taskStart').value = startDate;
-        document.getElementById('taskEnd').value   = endDate;
+// Equivalente ao antigo "Cancelar" para uma tarefa recém-criada pelo autosave:
+// remove a tarefa que acabou de nascer, com desfazer disponível no toast.
+function discardDraft() {
+    if (!draft.createdHere || !draft.taskId) { closeModal(); return; }
+    const id = draft.taskId;
+    resetDraftState();
+    document.getElementById('taskModal').classList.remove('show');
+    const snap = removeTaskById(id);
+    if (!snap) return;
+    saveToStorage(1200);
+    render();
+    showActionToast(`Tarefa “${truncate(snap.title, 40)}” descartada.`, 'Desfazer', () => restoreTask(snap));
+}
+
+function draftDiffersFromOriginal() {
+    const o = draft.original;
+    if (!o || !draft.taskId) return false;
+    const t = tasks.find(tk => tk.id === draft.taskId);
+    if (!t) return false;
+    return t.title !== o.title || t.description !== o.description || t.status !== o.status
+        || t.startDate !== o.startDate || t.endDate !== o.endDate;
+}
+
+// Desfaz, de uma vez, tudo que foi alterado desde que o modal abriu.
+function revertDraft() {
+    const o = draft.original;
+    if (!o || !draft.taskId) return;
+    const t = tasks.find(tk => tk.id === draft.taskId);
+    if (!t) return;
+    clearTimeout(draft.timer);
+    draft.timer = null;
+
+    t.title = o.title;
+    t.description = o.description;
+    t.status = o.status;
+    t.startDate = o.startDate;
+    t.endDate = o.endDate;
+    t.modifiedAt = nowISOGMT3();
+
+    document.getElementById('taskTitle').value = o.title;
+    document.getElementById('taskDesc').value = o.description;
+    if (window.setTaskStatus) window.setTaskStatus(o.status, true);
+    document.getElementById('taskStart').value = o.startDate;
+    document.getElementById('taskEnd').value = o.endDate;
+
+    draft.wrote = true;
+    saveToStorage(1200);
+    render();
+    updateDraftChrome();
+    updateTitleHint();
+    setAutosaveState('reverted');
+}
+
+function readTaskForm() {
+    return {
+        title: document.getElementById('taskTitle').value.trim(),
+        description: document.getElementById('taskDesc').value.trim(),
+        status: (window.getTaskStatusValue ? window.getTaskStatusValue() : document.getElementById('taskStatus').value) || 'To Do',
+        startDate: document.getElementById('taskStart').value,
+        endDate: document.getElementById('taskEnd').value
+    };
+}
+
+// Chamado a cada alteração de campo (também pelo script inline do index.html).
+// opts.immediate = controles discretos (status, datas), que não precisam esperar.
+function notifyDraftChange(opts) {
+    if (!draft.open) return;
+    updateTitleHint();
+    clearTimeout(draft.timer);
+    draft.timer = null;
+
+    if (!document.getElementById('taskTitle').value.trim()) {
+        setAutosaveState(draft.taskId ? 'title-required' : 'awaiting-title');
+        return;
+    }
+    setAutosaveState('saving');
+    if (opts && opts.immediate) commitDraft();
+    else draft.timer = setTimeout(commitDraft, DRAFT_DEBOUNCE_MS);
+}
+
+function commitDraft() {
+    if (!draft.open || draft.committing) return false;
+    clearTimeout(draft.timer);
+    draft.timer = null;
+
+    const form = readTaskForm();
+    const existing = draft.taskId ? tasks.find(t => t.id === draft.taskId) : null;
+
+    // A tarefa sumiu debaixo da edição (exclusão vinda de outro dispositivo):
+    // não descarta o que está na tela — a próxima gravação recria com id novo.
+    if (draft.taskId && !existing) {
+        draft.taskId = null;
+        draft.createdHere = true;
     }
 
-    if (editingId) {
-        const t = tasks.find(tk => tk.id === editingId);
-        const prevStatus = t.status;
-        t.title = title; t.description = desc; t.status = status;
-        t.startDate = startDate; t.endDate = endDate;
-        reconcileStatusAfterDateChange(t, prevStatus);
-        t.modifiedAt = nowISOGMT3();
-    } else {
+    if (!form.title) {
+        setAutosaveState(draft.taskId ? 'title-required' : 'awaiting-title');
+        return false;
+    }
+
+    draft.committing = true;
+    try {
         const now = nowISOGMT3();
-        tasks.push({ id: genId(), title, description: desc, status, startDate, endDate, createdAt: now, modifiedAt: now });
+        if (existing) {
+            // Campo de data vazio (ou incompleto) nunca apaga a data já salva.
+            let startDate = form.startDate || existing.startDate;
+            let endDate = form.endDate || existing.endDate;
+            if (endDate < startDate) { const tmp = startDate; startDate = endDate; endDate = tmp; }
+            const unchanged = existing.title === form.title
+                && existing.description === form.description
+                && existing.status === form.status
+                && existing.startDate === startDate
+                && existing.endDate === endDate;
+            if (unchanged) { setAutosaveState(draft.wrote ? 'saved' : 'saved-idle'); return false; }
+            const prevStatus = existing.status;
+            existing.title = form.title;
+            existing.description = form.description;
+            existing.status = form.status;
+            existing.startDate = startDate;
+            existing.endDate = endDate;
+            reconcileStatusAfterDateChange(existing, prevStatus);
+            existing.modifiedAt = now;
+        } else {
+            const today = todayStrGMT3();
+            let startDate = form.startDate || today;
+            let endDate = form.endDate || startDate;
+            if (endDate < startDate) { const tmp = startDate; startDate = endDate; endDate = tmp; }
+            const created = {
+                id: genId(), title: form.title, description: form.description, status: form.status,
+                startDate, endDate, createdAt: now, modifiedAt: now
+            };
+            tasks.push(created);
+            draft.taskId = created.id;   // ← vínculo por id: daqui em diante é sempre update
+            draft.createdHere = true;
+        }
+
+        draft.wrote = true;
+        saveToStorage(DRAFT_GIST_DELAY_MS);
+        render();
+
+        // render() pode reclassificar o status (autoUpdateStatuses); reflete isso nos
+        // botões, senão o modal mostraria um status diferente do que está gravado.
+        const stored = tasks.find(t => t.id === draft.taskId);
+        if (stored && window.setTaskStatus && stored.status !== form.status) {
+            window.setTaskStatus(stored.status, true);
+        }
+
+        updateDraftChrome();
+        updateTitleHint();
+        setAutosaveState((form.startDate && form.endDate) ? 'saved' : 'dates-kept');
+        return true;
+    } finally {
+        draft.committing = false;
     }
-    saveToStorage(); closeModal(); render();
 }
+
+// ─── FEEDBACK DO AUTOSAVE ───
+function setAutosaveState(state) {
+    const chip = document.getElementById('autosaveChip');
+    const text = document.getElementById('autosaveChipText');
+    if (!chip || !text) return;
+    chip.classList.remove('saving', 'saved', 'warn');
+    let msg = '';
+    switch (state) {
+        case 'awaiting-title':
+            msg = 'A tarefa é salva sozinha assim que tiver um título.';
+            break;
+        case 'saving':
+            chip.classList.add('saving');
+            msg = 'Salvando…';
+            break;
+        case 'saved':
+            chip.classList.add('saved');
+            draft.lastSavedAt = new Date();
+            msg = 'Salva automaticamente · ' + formatClock(draft.lastSavedAt);
+            break;
+        case 'saved-idle':
+            chip.classList.add('saved');
+            msg = draft.lastSavedAt
+                ? 'Salva automaticamente · ' + formatClock(draft.lastSavedAt)
+                : 'As alterações são salvas automaticamente.';
+            break;
+        case 'title-required':
+            chip.classList.add('warn');
+            msg = 'Título vazio — mantendo o último título salvo.';
+            break;
+        case 'reverted':
+            chip.classList.add('saved');
+            draft.lastSavedAt = new Date();
+            msg = 'Alterações revertidas · ' + formatClock(draft.lastSavedAt);
+            break;
+        case 'dates-kept':
+            chip.classList.add('warn');
+            draft.lastSavedAt = new Date();
+            msg = 'Salva · datas incompletas, mantidas as anteriores.';
+            break;
+    }
+    text.textContent = msg;
+}
+
+function formatClock(d) {
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDateTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('pt-BR') + ' ' + formatClock(d);
+}
+
+// Linha "criada em / alterada em" + visibilidade do botão Descartar.
+function updateDraftChrome() {
+    const t = draft.taskId ? tasks.find(tk => tk.id === draft.taskId) : null;
+    const meta = document.getElementById('taskMeta');
+    if (meta) {
+        if (t) {
+            meta.textContent = `Criada em ${formatDateTime(t.createdAt)}  ·  última alteração ${formatDateTime(t.modifiedAt)}`;
+            meta.classList.add('show');
+        } else {
+            meta.textContent = '';
+            meta.classList.remove('show');
+        }
+    }
+    const discard = document.getElementById('discardBtn');
+    if (discard) discard.style.display = (draft.createdHere && draft.taskId) ? '' : 'none';
+    const revert = document.getElementById('revertBtn');
+    if (revert) revert.style.display = (!draft.createdHere && draftDiffersFromOriginal()) ? '' : 'none';
+}
+
+// Validação inline do título: nunca bloqueia a digitação, apenas avisa.
+function updateTitleHint() {
+    const input = document.getElementById('taskTitle');
+    const hint = document.getElementById('taskTitleHint');
+    if (!input || !hint) return;
+    const title = input.value.trim();
+    const key = title.toLowerCase();
+    const duplicate = !!title && tasks.some(t => t.id !== draft.taskId && (t.title || '').toLowerCase() === key);
+
+    if (!title && draft.taskId) {
+        input.classList.add('invalid');
+        hint.className = 'field-hint warn show';
+        hint.textContent = 'O título não pode ficar vazio — o último título salvo continua valendo.';
+    } else if (duplicate) {
+        input.classList.remove('invalid');
+        hint.className = 'field-hint warn show';
+        hint.textContent = 'Já existe outra tarefa com este título. Títulos repetidos atrapalham a sincronização entre dispositivos.';
+    } else {
+        input.classList.remove('invalid');
+        hint.className = 'field-hint';
+        hint.textContent = '';
+    }
+}
+
 function editTask(id) { openModal(id); }
-function deleteTask(id) {
-    if (!confirm('Tem certeza que deseja excluir esta tarefa?')) return;
+
+// ─── EXCLUSÃO COM DESFAZER ───
+// Remove a tarefa e registra o tombstone (a exclusão precisa viajar até os outros
+// dispositivos — ausência nunca é tratada como exclusão pela reconciliação).
+function removeTaskById(id) {
     const t = tasks.find(tk => tk.id === id);
-    if (t) tombstones.push({ id: t.id, title: t.title, deletedAt: nowISOGMT3() });
-    tasks = tasks.filter(t => t.id !== id);
-    saveToStorage(); render();
+    if (!t) return null;
+    const snap = { ...t };
+    tombstones.push({ id: t.id, title: t.title, deletedAt: nowISOGMT3() });
+    tasks = tasks.filter(tk => tk.id !== id);
+    return snap;
 }
+
+function deleteTask(id) {
+    // Se a tarefa aberta no modal for a excluída, encerra o rascunho SEM gravar —
+    // gravar aqui recriaria a tarefa que o usuário acabou de excluir.
+    if (draft.open && draft.taskId === id) {
+        resetDraftState();
+        document.getElementById('taskModal').classList.remove('show');
+    }
+    const snap = removeTaskById(id);
+    if (!snap) return;
+    saveToStorage();
+    render();
+    showActionToast(`Tarefa “${truncate(snap.title, 40)}” excluída.`, 'Desfazer', () => restoreTask(snap));
+}
+
+function restoreTask(snap) {
+    if (!snap || !snap.id || tasks.some(t => t.id === snap.id)) return;
+    const key = (snap.title || '').toLowerCase();
+    // Limpa os tombstones da tarefa para que a restauração sobreviva ao próximo sync.
+    tombstones = tombstones.filter(tb => tb.id !== snap.id && (tb.title || '').toLowerCase() !== key);
+    tasks.push({ ...snap, modifiedAt: nowISOGMT3() });
+    saveToStorage(1200);
+    render();
+    showActionToast('Tarefa restaurada.', null, null, 2500);
+}
+
+// ─── TOAST COM AÇÃO ───
+function showActionToast(msg, actionLabel, onAction, durationMs) {
+    let toast = document.getElementById('actionToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'actionToast';
+        toast.className = 'action-toast';
+        toast.innerHTML = '<span class="toast-msg"></span>'
+            + '<button type="button" class="toast-action"></button>'
+            + '<button type="button" class="toast-close" aria-label="Fechar aviso">✕</button>';
+        document.body.appendChild(toast);
+        toast.querySelector('.toast-close').addEventListener('click', hideActionToast);
+        toast.querySelector('.toast-action').addEventListener('click', () => {
+            const fn = toast._onAction;
+            hideActionToast();
+            if (fn) fn();
+        });
+    }
+    toast._onAction = onAction || null;
+    toast.querySelector('.toast-msg').textContent = msg;
+    const actionBtn = toast.querySelector('.toast-action');
+    actionBtn.textContent = actionLabel || '';
+    actionBtn.style.display = actionLabel ? '' : 'none';
+    toast.classList.add('show');
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(hideActionToast, durationMs || 7000);
+}
+
+function hideActionToast() {
+    const toast = document.getElementById('actionToast');
+    if (!toast) return;
+    clearTimeout(toast._timer);
+    toast.classList.remove('show');
+    toast._onAction = null;
+}
+
+function truncate(str, max) {
+    str = str || '';
+    return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
+// ─── LIGAÇÃO DOS CAMPOS AO AUTOSAVE ───
+function initTaskDraftUI() {
+    const title = document.getElementById('taskTitle');
+    const desc = document.getElementById('taskDesc');
+    if (title) {
+        title.addEventListener('input', () => notifyDraftChange());
+        // Sair do campo fecha o título: grava sem esperar o resto do debounce.
+        // Exceção: se o foco vai para "Descartar", não faz sentido criar para apagar.
+        title.addEventListener('blur', e => {
+            const to = e.relatedTarget && e.relatedTarget.id;
+            if (to === 'discardBtn' || to === 'revertBtn') return;
+            notifyDraftChange({ immediate: true });
+        });
+    }
+    // Cobre também os botões da barra Markdown, que disparam 'input' no textarea.
+    if (desc) desc.addEventListener('input', () => notifyDraftChange());
+
+    const overlay = document.getElementById('taskModal');
+    if (overlay) {
+        overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+    }
+    // Usado pelo script inline do index.html (status e datas).
+    window.notifyDraftChange = notifyDraftChange;
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTaskDraftUI);
+else initTaskDraftUI();
 
 // ─── STATUS DROPDOWN (na tabela) ───
 function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
@@ -1225,13 +1677,36 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ─── KEYBOARD ───
+function isTypingTarget(el) {
+    if (!el) return false;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
+}
+
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); }
-    if (e.key === 'Enter') {
-        if (document.getElementById('taskModal').classList.contains('show') && document.activeElement.tagName !== 'TEXTAREA') saveTask();
-        if (document.getElementById('loginForm').classList.contains('active') && document.getElementById('authScreen').style.display !== 'none') doLogin();
-        if (document.getElementById('registerForm').classList.contains('active') && document.getElementById('authScreen').style.display !== 'none') doRegister();
+    const taskModalOpen = document.getElementById('taskModal').classList.contains('show');
+
+    // Esc apenas fecha: com o autosave, o que foi digitado já está gravado.
+    if (e.key === 'Escape') {
+        closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); hideActionToast();
+        return;
     }
+
+    if (e.key === 'Enter') {
+        // Ctrl/Cmd+Enter conclui de qualquer campo, inclusive da descrição.
+        if (taskModalOpen && (e.ctrlKey || e.metaKey)) { e.preventDefault(); closeModal(); return; }
+        if (taskModalOpen && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); closeModal(); return; }
+        const authVisible = document.getElementById('authScreen').style.display !== 'none';
+        if (authVisible && document.getElementById('loginForm').classList.contains('active')) doLogin();
+        if (authVisible && document.getElementById('registerForm').classList.contains('active')) doRegister();
+        return;
+    }
+
+    // Atalhos globais: só com o app aberto, fora de campos de texto e sem modais.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!currentUser || isTypingTarget(e.target)) return;
+    if (document.querySelector('.modal-overlay.show')) return;
+    if (e.key === 'n' || e.key === 'N') { e.preventDefault(); openModal(); }
+    else if (e.key === '/') { e.preventDefault(); const si = document.getElementById('searchInput'); if (si) si.focus(); }
 });
 
 // ─── UTILS ───
@@ -1255,7 +1730,7 @@ async function purgeOldCompletedTasks(showConfirm = true) {
     if (showConfirm) {
         if (count === 0) { showPurgeToast('✅ Nenhuma tarefa elegível para remoção.', 'info'); return 0; }
         const plural = count === 1 ? 'tarefa' : 'tarefas';
-        const ok = window.confirm(`Remover ${count} ${plural} com status Completed\ncujo término foi há mais de 30 dias?\n\n(referência: ${cutoffStr})\n\nEsta ação não pode ser desfeita.`);
+        const ok = window.confirm(`Remover ${count} ${plural} concluída(s)\ncujo término foi há mais de 30 dias?\n\n(referência: ${cutoffStr})\n\nEsta ação não pode ser desfeita.`);
         if (!ok) return 0;
     }
     if (count === 0) return 0;

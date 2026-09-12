@@ -711,6 +711,81 @@
     .purge-toast.success { border-color: var(--completed-border); color: var(--completed); }
     .purge-toast.info    { border-color: var(--inprogress-border); color: var(--inprogress); }
 
+    /* -- AUTOSAVE (rodape do modal de tarefa) ------------------ */
+    .modal-footer-split { justify-content: space-between; align-items: center; flex-wrap: wrap; }
+    .modal-footer-split .footer-actions { display: flex; gap: 10px; margin-left: auto; }
+
+    .autosave-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 12px; line-height: 1.4; color: var(--text-dim);
+      max-width: 300px; transition: color 0.2s;
+    }
+    .autosave-chip .chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; transition: background 0.2s; }
+    .autosave-chip.saving { color: var(--inprogress); }
+    .autosave-chip.saving .chip-dot { background: var(--inprogress); animation: chipPulse 1s ease-in-out infinite; }
+    .autosave-chip.saved { color: var(--completed); }
+    .autosave-chip.saved .chip-dot { background: var(--completed); }
+    .autosave-chip.warn { color: var(--overdue); }
+    .autosave-chip.warn .chip-dot { background: var(--overdue); }
+    @keyframes chipPulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
+
+    /* Dica / validacao inline abaixo de um campo */
+    .field-hint { font-size: 11px; line-height: 1.5; margin-top: 6px; display: none; }
+    .field-hint.show { display: block; }
+    .field-hint.warn { color: var(--overdue); }
+    .field-hint.info { color: var(--text-dim); }
+    .form-group input.invalid { border-color: var(--overdue); }
+
+    /* Metadados da tarefa em edicao */
+    .modal-meta {
+      display: none; font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: var(--text-dim);
+      margin: -8px 0 16px; padding-bottom: 12px; border-bottom: 1px dashed var(--border);
+    }
+    .modal-meta.show { display: block; }
+
+    .kbd {
+      font-family: 'JetBrains Mono', monospace; font-size: 10px;
+      border: 1px solid var(--border-light); border-bottom-width: 2px; border-radius: 4px;
+      padding: 1px 5px; color: var(--text-muted); background: var(--surface-elevated); white-space: nowrap;
+    }
+
+    /* -- TOAST COM ACAO (desfazer) ----------------------------- */
+    .action-toast {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(16px);
+      display: flex; align-items: center; gap: 16px;
+      background: var(--surface-elevated); border: 1px solid var(--border-light);
+      color: var(--text); border-radius: 10px; padding: 11px 14px 11px 18px;
+      font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+      z-index: 10000; box-shadow: 0 6px 28px rgba(0,0,0,0.45);
+      opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s;
+      max-width: calc(100vw - 32px);
+    }
+    .action-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+    .action-toast .toast-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action-toast .toast-action {
+      border: 1px solid var(--border-light); background: transparent; color: var(--accent-hover);
+      font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+      padding: 5px 12px; border-radius: var(--radius-sm); transition: all 0.15s; flex-shrink: 0;
+    }
+    .action-toast .toast-action:hover { background: var(--surface-hover); color: var(--text); }
+    .action-toast .toast-close {
+      border: none; background: transparent; color: var(--text-dim);
+      cursor: pointer; font-size: 15px; line-height: 1; padding: 4px 2px; flex-shrink: 0;
+    }
+    .action-toast .toast-close:hover { color: var(--text); }
+
+    /* Estado vazio: acoes secundarias */
+    .empty-state .empty-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+    /* Foco visivel -- acessibilidade por teclado */
+    .btn:focus-visible, .filter-btn:focus-visible, .icon-btn:focus-visible,
+    .status-btn:focus-visible, .view-tab:focus-visible, .modal-close:focus-visible,
+    .md-tab-btn:focus-visible, .status-badge:focus-visible, .toast-action:focus-visible {
+      outline: 2px solid var(--accent-hover); outline-offset: 2px;
+    }
+
     /* RESPONSIVE */
     @media(max-width:768px) {
       .app-header { padding: 16px; }
@@ -722,6 +797,8 @@
       .md-viewer-modal { max-width: 100%; }
       .status-btn-group { gap: 5px; }
       .status-btn { min-width: 70px; font-size: 11px; padding: 7px 6px; }
+      .modal-footer-split { gap: 10px; }
+      .autosave-chip { max-width: 100%; font-size: 11px; }
     }
 
     ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -779,10 +856,10 @@
           </svg><span>Sincronizar</span>
         </button>
         <input type="file" id="csvInput" accept=".json" onchange="importFileJSON(event)">
-        <button class="btn btn-primary" onclick="openModal()">
+        <button class="btn btn-primary" onclick="openModal()" title="Nova tarefa (atalho: N)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg><span>Nova Tarefa</span>
+          </svg><span>Nova tarefa</span>
         </button>
         <div class="user-menu-wrapper">
           <button class="user-btn" onclick="toggleUserMenu(event)" id="userMenuBtn">
@@ -806,22 +883,23 @@
 
     <div class="toolbar">
       <div class="toolbar-left">
-        <button class="filter-btn active" data-filter="all" onclick="toggleFilter('all', this)">Todas</button>
-        <button class="filter-btn" data-filter="Completed" onclick="toggleFilter('Completed', this)">
-          <span class="dot" style="background:var(--completed);width:8px;height:8px;border-radius:50%;display:inline-block"></span>Completed
+        <button class="filter-btn active" data-filter="all" onclick="toggleFilter('all', this)" aria-pressed="true">Todas</button>
+        <button class="filter-btn" data-filter="Completed" onclick="toggleFilter('Completed', this)" aria-pressed="false">
+          <span class="dot" style="background:var(--completed);width:8px;height:8px;border-radius:50%;display:inline-block"></span>Concluídas
         </button>
-        <button class="filter-btn" data-filter="In Progress" onclick="toggleFilter('In Progress', this)">
-          <span class="dot" style="background:var(--inprogress);width:8px;height:8px;border-radius:50%;display:inline-block"></span>In Progress
+        <button class="filter-btn" data-filter="In Progress" onclick="toggleFilter('In Progress', this)" aria-pressed="false">
+          <span class="dot" style="background:var(--inprogress);width:8px;height:8px;border-radius:50%;display:inline-block"></span>Em andamento
         </button>
-        <button class="filter-btn" data-filter="To Do" onclick="toggleFilter('To Do', this)">
-          <span class="dot" style="background:var(--todo);width:8px;height:8px;border-radius:50%;display:inline-block"></span>To Do
+        <button class="filter-btn" data-filter="To Do" onclick="toggleFilter('To Do', this)" aria-pressed="false">
+          <span class="dot" style="background:var(--todo);width:8px;height:8px;border-radius:50%;display:inline-block"></span>A fazer
         </button>
-        <button class="filter-btn" data-filter="Overdue" onclick="toggleFilter('Overdue', this)">
-          <span class="dot" style="background:var(--overdue);width:8px;height:8px;border-radius:50%;display:inline-block"></span>Overdue
+        <button class="filter-btn" data-filter="Overdue" onclick="toggleFilter('Overdue', this)" aria-pressed="false">
+          <span class="dot" style="background:var(--overdue);width:8px;height:8px;border-radius:50%;display:inline-block"></span>Atrasadas
         </button>
       </div>
       <div class="toolbar-right">
-        <input type="text" class="search-input" placeholder="Buscar tarefas..." oninput="searchTasks(this.value)">
+        <input type="search" id="searchInput" class="search-input" placeholder="Buscar tarefas…  (/)"
+               aria-label="Buscar tarefas por título ou descrição" oninput="searchTasks(this.value)">
       </div>
     </div>
 
@@ -850,16 +928,7 @@
           </thead>
           <tbody id="taskTableBody"></tbody>
         </table>
-        <div id="emptyState" class="empty-state" style="display:none">
-          <div class="empty-icon">📋</div>
-          <h3>Nenhuma tarefa encontrada</h3>
-          <p>Crie sua primeira tarefa para começar a gerenciar seu projeto.</p>
-          <button class="btn btn-primary" onclick="openModal()">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>Criar Tarefa
-          </button>
-        </div>
+        <div id="emptyState" class="empty-state" style="display:none"></div>
       </div>
       <div id="ganttView" style="display:none">
         <div class="gantt-nav">
@@ -969,18 +1038,22 @@
     </div>
   </div>
 
-  <!-- TASK MODAL com editor Markdown e status por botões -->
+  <!-- TASK MODAL — salvamento automático (sem botão "Criar Tarefa") -->
   <div class="modal-overlay" id="taskModal">
-    <div class="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-header">
-        <h2 id="modalTitle">Nova Tarefa</h2>
-        <button class="modal-close" onclick="closeModal()">&#x2715;</button>
+        <h2 id="modalTitle">Nova tarefa</h2>
+        <button class="modal-close" onclick="closeModal()" title="Fechar (Esc)" aria-label="Fechar">&#x2715;</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label>Título</label>
-          <input type="text" id="taskTitle" placeholder="Nome da tarefa">
+          <label for="taskTitle">Título <span style="color:var(--overdue)" aria-hidden="true">*</span></label>
+          <input type="text" id="taskTitle" placeholder="Nome da tarefa" autocomplete="off"
+                 aria-describedby="taskTitleHint" aria-required="true">
+          <div class="field-hint" id="taskTitleHint"></div>
         </div>
+
+        <div class="modal-meta" id="taskMeta"></div>
 
         <!-- Campo de descrição com suporte a Markdown -->
         <div class="form-group" style="margin-bottom:18px">
@@ -1020,19 +1093,19 @@
 
         <!-- STATUS por botões (NOVO) -->
         <div class="form-group">
-          <label>Status</label>
-          <div class="status-btn-group" id="statusBtnGroup">
-            <button class="status-btn" data-status="To Do" onclick="setTaskStatus('To Do')">
-              <span class="dot" style="background:var(--todo)"></span>To Do
+          <label id="statusGroupLabel">Status</label>
+          <div class="status-btn-group" id="statusBtnGroup" role="group" aria-labelledby="statusGroupLabel">
+            <button type="button" class="status-btn" data-status="To Do" onclick="setTaskStatus('To Do')" aria-pressed="false">
+              <span class="dot" style="background:var(--todo)"></span>A fazer
             </button>
-            <button class="status-btn" data-status="In Progress" onclick="setTaskStatus('In Progress')">
-              <span class="dot" style="background:var(--inprogress)"></span>In Progress
+            <button type="button" class="status-btn" data-status="In Progress" onclick="setTaskStatus('In Progress')" aria-pressed="false">
+              <span class="dot" style="background:var(--inprogress)"></span>Em andamento
             </button>
-            <button class="status-btn" data-status="Completed" onclick="setTaskStatus('Completed')">
-              <span class="dot" style="background:var(--completed)"></span>Completed
+            <button type="button" class="status-btn" data-status="Completed" onclick="setTaskStatus('Completed')" aria-pressed="false">
+              <span class="dot" style="background:var(--completed)"></span>Concluída
             </button>
-            <button class="status-btn" data-status="Overdue" onclick="setTaskStatus('Overdue')">
-              <span class="dot" style="background:var(--overdue)"></span>Overdue
+            <button type="button" class="status-btn" data-status="Overdue" onclick="setTaskStatus('Overdue')" aria-pressed="false">
+              <span class="dot" style="background:var(--overdue)"></span>Atrasada
             </button>
           </div>
           <!-- campo oculto que guarda o valor atual, lido pelo app.js via getTaskStatusValue() -->
@@ -1041,14 +1114,24 @@
 
         <!-- Datas com aviso de inversão automática -->
         <div class="form-row">
-          <div class="form-group"><label>Data de Início</label><input type="date" id="taskStart" oninput="handleDateInput()"></div>
-          <div class="form-group"><label>Data de Término</label><input type="date" id="taskEnd" oninput="handleDateInput()"></div>
+          <div class="form-group"><label for="taskStart">Data de início</label><input type="date" id="taskStart" oninput="handleDateInput()"></div>
+          <div class="form-group"><label for="taskEnd">Data de término</label><input type="date" id="taskEnd" oninput="handleDateInput()"></div>
         </div>
         <div class="date-swap-notice" id="dateSwapNotice">⇄ Datas invertidas automaticamente (início era posterior ao término).</div>
       </div>
-      <div class="modal-footer">
-        <button class="btn" onclick="closeModal()">Cancelar</button>
-        <button class="btn btn-primary" onclick="saveTask()" id="saveBtn">Criar Tarefa</button>
+      <div class="modal-footer modal-footer-split">
+        <div class="autosave-chip" id="autosaveChip" role="status" aria-live="polite">
+          <span class="chip-dot" aria-hidden="true"></span>
+          <span id="autosaveChipText">A tarefa é salva sozinha assim que tiver um título.</span>
+        </div>
+        <div class="footer-actions">
+          <button class="btn" id="revertBtn" onclick="revertDraft()" style="display:none"
+                  title="Desfazer as alterações feitas nesta edição">Reverter alterações</button>
+          <button class="btn btn-danger" id="discardBtn" onclick="discardDraft()" style="display:none"
+                  title="Excluir a tarefa que acabou de ser criada">Descartar</button>
+          <button class="btn btn-primary" id="doneBtn" onclick="closeModal()"
+                  title="Fechar (Esc ou Ctrl+Enter)">Concluído</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1094,10 +1177,10 @@
 
   <!-- STATUS DROPDOWN (na tabela) -->
   <div class="status-dropdown" id="statusDropdown">
-    <button class="status-option" onclick="changeStatus('Completed')"><span class="dot" style="background:var(--completed)"></span>Completed</button>
-    <button class="status-option" onclick="changeStatus('In Progress')"><span class="dot" style="background:var(--inprogress)"></span>In Progress</button>
-    <button class="status-option" onclick="changeStatus('To Do')"><span class="dot" style="background:var(--todo)"></span>To Do</button>
-    <button class="status-option" onclick="changeStatus('Overdue')"><span class="dot" style="background:var(--overdue)"></span>Overdue</button>
+    <button class="status-option" onclick="changeStatus('To Do')"><span class="dot" style="background:var(--todo)"></span>A fazer</button>
+    <button class="status-option" onclick="changeStatus('In Progress')"><span class="dot" style="background:var(--inprogress)"></span>Em andamento</button>
+    <button class="status-option" onclick="changeStatus('Completed')"><span class="dot" style="background:var(--completed)"></span>Concluída</button>
+    <button class="status-option" onclick="changeStatus('Overdue')"><span class="dot" style="background:var(--overdue)"></span>Atrasada</button>
   </div>
 
   <!-- GANTT TOOLTIP -->
@@ -1316,11 +1399,15 @@
      * Define o status ativo no grupo de botões e atualiza o campo oculto.
      * Chamado pelos onclick dos botões e também pelo app.js ao abrir o modal.
      */
-    function setTaskStatus(status) {
+    function setTaskStatus(status, silent) {
       document.getElementById('taskStatus').value = status;
       document.querySelectorAll('#statusBtnGroup .status-btn').forEach(function (btn) {
-        btn.classList.toggle('active', btn.dataset.status === status);
+        var on = btn.dataset.status === status;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
+      // Escolha discreta: grava na hora, sem esperar o debounce da digitação.
+      if (!silent && window.notifyDraftChange) window.notifyDraftChange({ immediate: true });
     }
 
     /**
@@ -1350,6 +1437,7 @@
       } else {
         notice.classList.remove('show');
       }
+      if (window.notifyDraftChange) window.notifyDraftChange({ immediate: true });
     }
 
     /* ── API PÚBLICA (chamada pelo app.js) ───────────────────── */
