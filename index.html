@@ -6,12 +6,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TaskFlow — Gestão de Tarefas</title>
 
-  <!-- Aplica o tema salvo antes de qualquer pintura, senão a tela pisca no tema errado. -->
+  <!-- Aplica tema e paleta salvos antes de qualquer pintura, senão a tela pisca
+       nas cores erradas. A lista de paletas vive em app.js (PALETTES); aqui só o
+       filtro que impede um valor inventado de virar atributo. -->
   <script>
     (function () {
       try {
         var t = localStorage.getItem('taskflow_theme');
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        var p = localStorage.getItem('taskflow_palette');
+        if (/^(indigo|teal|amber|rose|slate)$/.test(p || '')) document.documentElement.setAttribute('data-palette', p);
       } catch (e) { }
     })();
   </script>
@@ -31,16 +35,41 @@
     rel="stylesheet">
 
   <style>
+    /* ── PALETAS DE COR ─────────────────────────────────────────────────
+       Cada paleta declara só os quatro tons de acento e o matiz do neutro
+       (--tint-h / --tint-s); as superfícies são derivadas desse matiz em
+       hsl() nos blocos de tema logo abaixo, então uma paleta nova custa
+       uma linha por modo. O mesmo bloco pinta a raiz (data-palette) e o
+       mostruário do menu (.pal-*), para a bolinha nunca divergir do tema
+       que ela aplica. --on-accent é a tinta sobre o acento: acentos claros
+       (âmbar, teal no escuro) pedem texto escuro; os demais, branco. ── */
+
+    /* Paletas — modo escuro */
+    :root,
+    :root[data-palette="indigo"], .pal-indigo { --tint-h: 226; --tint-s: 18%; --accent: #6b6fe0; --accent-hover: #8b91ee; --accent-2: #a855f7; --on-accent: #fff; }
+    :root[data-palette="teal"],   .pal-teal   { --tint-h: 193; --tint-s: 13%; --accent: #14b8a6; --accent-hover: #2dd4bf; --accent-2: #0ea5e9; --on-accent: #04211e; }
+    :root[data-palette="amber"],  .pal-amber  { --tint-h: 34;  --tint-s: 12%; --accent: #e0a33f; --accent-hover: #f3bb61; --accent-2: #f97316; --on-accent: #2a1c02; }
+    :root[data-palette="rose"],   .pal-rose   { --tint-h: 330; --tint-s: 12%; --accent: #db2777; --accent-hover: #ee5fa7; --accent-2: #a855f7; --on-accent: #fff; }
+    :root[data-palette="slate"],  .pal-slate  { --tint-h: 220; --tint-s: 8%;  --accent: #5b6a80; --accent-hover: #7e8ea6; --accent-2: #475569; --on-accent: #fff; }
+
+    /* Paletas — modo claro (o matiz do neutro vem do bloco escuro acima) */
+    :root[data-theme="light"],
+    :root[data-theme="light"][data-palette="indigo"], :root[data-theme="light"] .pal-indigo { --accent: #5457cf; --accent-hover: #4338ca; --accent-2: #9333ea; --on-accent: #fff; }
+    :root[data-theme="light"][data-palette="teal"],   :root[data-theme="light"] .pal-teal   { --accent: #0f766e; --accent-hover: #115e59; --accent-2: #0369a1; --on-accent: #fff; }
+    :root[data-theme="light"][data-palette="amber"],  :root[data-theme="light"] .pal-amber  { --accent: #b45309; --accent-hover: #92400e; --accent-2: #c2410c; --on-accent: #fff; }
+    :root[data-theme="light"][data-palette="rose"],   :root[data-theme="light"] .pal-rose   { --accent: #be185d; --accent-hover: #9d174d; --accent-2: #7e22ce; --on-accent: #fff; }
+    :root[data-theme="light"][data-palette="slate"],  :root[data-theme="light"] .pal-slate  { --accent: #475569; --accent-hover: #334155; --accent-2: #64748b; --on-accent: #fff; }
+
     /* ── TEMA ESCURO (padrão) — tons suavizados: menos contraste duro,
        superfícies mais claras e texto menos estourado. ── */
     :root {
       color-scheme: dark;
-      --bg: #16181f;
-      --surface: #1d202a;
-      --surface-hover: #242836;
-      --surface-elevated: #2a2e3c;
-      --border: #303545;
-      --border-light: #3d4356;
+      --bg:               hsl(var(--tint-h) var(--tint-s) 10.5%);
+      --surface:          hsl(var(--tint-h) var(--tint-s) 14%);
+      --surface-hover:    hsl(var(--tint-h) var(--tint-s) 17.5%);
+      --surface-elevated: hsl(var(--tint-h) var(--tint-s) 20%);
+      --border:           hsl(var(--tint-h) var(--tint-s) 23%);
+      --border-light:     hsl(var(--tint-h) var(--tint-s) 29%);
       --text: #dcdfe7;
       --text-muted: #959aac;
       --text-dim: #757c90;
@@ -56,8 +85,6 @@
       --overdue: #f26d6d;
       --overdue-bg: rgba(242, 109, 109, 0.13);
       --overdue-border: rgba(242, 109, 109, 0.26);
-      --accent: #6b6fe0;
-      --accent-hover: #8b91ee;
       --danger: #f26d6d;
       --radius: 10px;
       --radius-sm: 6px;
@@ -74,12 +101,12 @@
     /* ── TEMA CLARO ── */
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg: #f5f6f9;
-      --surface: #ffffff;
-      --surface-hover: #edeff4;
+      --bg:               hsl(var(--tint-h) calc(var(--tint-s) + 6%) 96.9%);
+      --surface:          #ffffff;
+      --surface-hover:    hsl(var(--tint-h) calc(var(--tint-s) + 6%) 94.3%);
       --surface-elevated: #ffffff;
-      --border: #e3e6ed;
-      --border-light: #c9cfdb;
+      --border:           hsl(var(--tint-h) calc(var(--tint-s) + 4%) 91%);
+      --border-light:     hsl(var(--tint-h) calc(var(--tint-s) + 2%) 82.5%);
       --text: #1b1f2a;
       --text-muted: #596074;
       --text-dim: #6f7689;
@@ -95,8 +122,6 @@
       --overdue: #c02626;
       --overdue-bg: rgba(220, 38, 38, 0.10);
       --overdue-border: rgba(220, 38, 38, 0.26);
-      --accent: #5457cf;
-      --accent-hover: #4338ca;
       --danger: #c02626;
       --shadow: 0 4px 24px rgba(15, 23, 42, 0.10);
       --shadow-lg: 0 8px 32px rgba(15, 23, 42, 0.16);
@@ -144,7 +169,7 @@
     .logo-icon {
       width: 36px;
       height: 36px;
-      background: linear-gradient(135deg, var(--accent), #a855f7);
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
       border-radius: 8px;
       display: flex;
       align-items: center;
@@ -173,7 +198,7 @@
       white-space: nowrap;
     }
     .btn:hover { background: var(--surface-hover); border-color: var(--border-light); }
-    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
     .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
     .btn-danger { color: var(--danger); }
     .btn-danger:hover { background: var(--overdue-bg); border-color: var(--overdue-border); }
@@ -207,7 +232,7 @@
       transition: all 0.15s;
     }
     .filter-btn:hover { border-color: var(--border-light); color: var(--text); }
-    .filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .filter-btn.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
     .search-input {
       padding: 8px 14px;
@@ -630,7 +655,7 @@
     .md-rendered li>ul,.md-rendered li>ol { margin: 0.1em 0; }
     .md-rendered input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent); cursor: default; }
     .md-rendered ul li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.2em; }
-    .md-rendered blockquote { border-left: 3px solid var(--accent); margin: 0.8em 0; padding: 6px 16px; background: rgba(99,102,241,0.07); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-muted); }
+    .md-rendered blockquote { border-left: 3px solid var(--accent); margin: 0.8em 0; padding: 6px 16px; background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-muted); }
     .md-rendered blockquote p { margin: 0; }
     .md-rendered code { font-family: 'JetBrains Mono', monospace; font-size: 0.87em; background: var(--surface-elevated); color: var(--code-text); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
     .md-rendered pre { background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; overflow-x: auto; margin: 0.8em 0; }
@@ -720,7 +745,7 @@
 
     /* AUTH */
     .auth-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: var(--bg); position: relative; }
-    .auth-theme-toggle { position: absolute; top: 20px; right: 20px; }
+    .auth-appearance { position: absolute; top: 20px; right: 20px; display: flex; gap: 8px; z-index: 10; }
     .auth-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; width: 100%; max-width: 420px; box-shadow: var(--shadow-lg); overflow: hidden; }
     .auth-header { text-align: center; padding: 32px 24px 20px; }
     .auth-header .logo { justify-content: center; font-size: 26px; margin-bottom: 8px; }
@@ -740,7 +765,7 @@
     .user-menu-wrapper { position: relative; }
     .user-btn { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
     .user-btn:hover { border-color: var(--border-light); background: var(--surface-hover); }
-    .user-avatar { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), #a855f7); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
+    .user-avatar { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--on-accent); }
     .user-dropdown { position: absolute; top: calc(100% + 6px); right: 0; background: var(--surface-elevated); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 6px; box-shadow: var(--shadow); z-index: 200; min-width: 200px; display: none; }
     .user-dropdown.show { display: block; }
     .user-dropdown-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: none; background: none; color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm); width: 100%; transition: background 0.1s; }
@@ -852,6 +877,41 @@
     :root[data-theme="light"] .theme-icon-light { display: block; }
     :root[data-theme="light"] .theme-icon-dark  { display: none; }
 
+    /* -- SELETOR DE PALETA -------------------------------------
+       Cada botão carrega a classe .pal-* da sua paleta, então a bolinha
+       se pinta sozinha com o acento que o clique vai aplicar. */
+    .palette-wrapper { position: relative; display: inline-flex; }
+    .palette-btn { padding: 9px 11px; }
+    .palette-btn svg { width: 16px; height: 16px; }
+    .palette-menu {
+      position: absolute; top: calc(100% + 6px); right: 0;
+      background: var(--surface-elevated); border: 1px solid var(--border-light);
+      border-radius: var(--radius); padding: 8px; box-shadow: var(--shadow);
+      z-index: 300; min-width: 190px; display: none; text-align: left;
+    }
+    .palette-wrapper.show .palette-menu { display: block; }
+    .palette-menu-title {
+      padding: 4px 8px 8px; font-size: 11px; font-weight: 600;
+      letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-dim);
+    }
+    .palette-swatch {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 8px 10px; border: none; border-radius: var(--radius-sm);
+      background: none; color: var(--text); font-family: inherit;
+      font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.1s;
+    }
+    .palette-swatch:hover { background: var(--surface-hover); }
+    .palette-swatch:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: -2px; }
+    .palette-dot {
+      width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: inset 0 0 0 1px var(--hover-tint);
+    }
+    .palette-check { margin-left: auto; color: var(--text-dim); opacity: 0; }
+    .palette-check svg { width: 14px; height: 14px; display: block; }
+    .palette-swatch[aria-checked="true"] { background: var(--surface-hover); }
+    .palette-swatch[aria-checked="true"] .palette-check { opacity: 1; }
+
     /* -- PRIORIDADE: REORDENACAO POR ARRASTO ------------------- */
     .task-table td.drag-cell { width: 34px; padding: 14px 2px 14px 12px; }
     .task-table th.drag-col  { width: 34px; padding-right: 2px; padding-left: 12px; }
@@ -903,14 +963,31 @@
 
   <!-- AUTH SCREEN -->
   <div id="authScreen" class="auth-screen" style="display:none">
-        <button class="btn theme-toggle auth-theme-toggle" id="themeToggleBtnAuth" onclick="toggleTheme()" title="Alternar tema" aria-label="Alternar tema">
-          <svg class="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
-          </svg>
-          <svg class="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+    <div class="auth-appearance">
+      <button class="btn theme-toggle" id="themeToggleBtnAuth" onclick="toggleTheme()" title="Alternar tema" aria-label="Alternar tema">
+        <svg class="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+        </svg>
+        <svg class="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+        </svg>
+      </button>
+      <div class="palette-wrapper">
+        <button class="btn palette-btn" onclick="togglePaletteMenu(event)" title="Cor do tema" aria-label="Cor do tema" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h1.99c3.06 0 5.56-2.5 5.56-5.56C21.97 6.01 17.46 2 12 2z"/>
+            <circle cx="6.6" cy="12.6" r="1.15" fill="currentColor" stroke="none"/>
+            <circle cx="8.9" cy="7.9" r="1.15" fill="currentColor" stroke="none"/>
+            <circle cx="14" cy="6.9" r="1.15" fill="currentColor" stroke="none"/>
+            <circle cx="17.5" cy="10.6" r="1.15" fill="currentColor" stroke="none"/>
           </svg>
         </button>
+        <div class="palette-menu" role="menu" aria-label="Cor do tema">
+          <div class="palette-menu-title">Cor do tema</div>
+          <div class="palette-grid"></div>
+        </div>
+      </div>
+    </div>
     <div class="auth-card">
       <div class="auth-header">
         <div class="logo"><div class="logo-icon">&#9638;</div> TaskFlow</div>
@@ -950,6 +1027,21 @@
             <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
           </svg>
         </button>
+        <div class="palette-wrapper">
+          <button class="btn palette-btn" onclick="togglePaletteMenu(event)" title="Cor do tema" aria-label="Cor do tema" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h1.99c3.06 0 5.56-2.5 5.56-5.56C21.97 6.01 17.46 2 12 2z"/>
+              <circle cx="6.6" cy="12.6" r="1.15" fill="currentColor" stroke="none"/>
+              <circle cx="8.9" cy="7.9" r="1.15" fill="currentColor" stroke="none"/>
+              <circle cx="14" cy="6.9" r="1.15" fill="currentColor" stroke="none"/>
+              <circle cx="17.5" cy="10.6" r="1.15" fill="currentColor" stroke="none"/>
+            </svg>
+          </button>
+          <div class="palette-menu" role="menu" aria-label="Cor do tema">
+            <div class="palette-menu-title">Cor do tema</div>
+            <div class="palette-grid"></div>
+          </div>
+        </div>
         <button class="btn" onclick="openSyncModal('gist')" title="Sincronizar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>

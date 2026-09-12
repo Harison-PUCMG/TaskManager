@@ -357,11 +357,26 @@ function updateUserUI() {
     document.getElementById('userDropdownEmail').textContent = currentUser.email;
 }
 
-// ─── TEMA (escuro / claro) ───
-// A preferência vive no localStorage (e não no banco) porque a tela de login,
-// anterior a qualquer usuário, também precisa dela. O <head> a aplica antes da
-// primeira pintura; aqui só garantimos o atributo e o rótulo dos botões.
+// ─── TEMA (escuro / claro) E PALETA DE COR ───
+// As duas preferências vivem no localStorage (e não no banco) porque a tela de
+// login, anterior a qualquer usuário, também precisa delas. O <head> as aplica
+// antes da primeira pintura; aqui só garantimos os atributos e a interface.
+// Modo e paleta são independentes: cada paleta existe em claro e em escuro.
 const THEME_KEY = 'taskflow_theme';
+const PALETTE_KEY = 'taskflow_palette';
+
+// Os tons de cada paleta ficam no CSS (blocos [data-palette] e .pal-*); aqui
+// só o que a interface precisa nomear. Uma paleta nova custa uma linha nesta
+// lista, um bloco por modo no CSS e o mesmo id nos dois lugares — e o filtro
+// do <head>, que barra valores inventados antes de o app.js carregar.
+const PALETTES = [
+    { id: 'indigo', name: 'Índigo' },
+    { id: 'teal', name: 'Teal' },
+    { id: 'amber', name: 'Âmbar' },
+    { id: 'rose', name: 'Rosa' },
+    { id: 'slate', name: 'Grafite' }
+];
+const DEFAULT_PALETTE = 'indigo';
 
 function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
 
@@ -379,11 +394,70 @@ function updateThemeButtons() {
     document.querySelectorAll('.theme-toggle').forEach(b => { b.title = label; b.setAttribute('aria-label', label); });
 }
 
+function isPalette(id) { return PALETTES.some(p => p.id === id); }
+
+function currentPalette() {
+    const p = document.documentElement.getAttribute('data-palette');
+    return isPalette(p) ? p : DEFAULT_PALETTE;
+}
+
+function applyPalette(id) {
+    const p = isPalette(id) ? id : DEFAULT_PALETTE;
+    document.documentElement.setAttribute('data-palette', p);
+    try { localStorage.setItem(PALETTE_KEY, p); } catch (e) { }
+    updatePaletteButtons();
+    closePaletteMenus();
+}
+
+// O mostruário aparece em dois lugares (cabeçalho do app e tela de login), daí
+// montá-lo por código em vez de repetir cinco botões no HTML duas vezes.
+function renderPaletteMenus() {
+    const check = '<span class="palette-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>';
+    const html = PALETTES.map(p =>
+        `<button class="palette-swatch pal-${p.id}" type="button" role="menuitemradio" aria-checked="false" data-palette="${p.id}" onclick="applyPalette('${p.id}')">` +
+        `<span class="palette-dot"></span><span>${p.name}</span>${check}</button>`
+    ).join('');
+    document.querySelectorAll('.palette-grid').forEach(g => { g.innerHTML = html; });
+    updatePaletteButtons();
+}
+
+function updatePaletteButtons() {
+    const active = currentPalette();
+    const name = (PALETTES.find(p => p.id === active) || PALETTES[0]).name;
+    document.querySelectorAll('.palette-swatch').forEach(b => {
+        b.setAttribute('aria-checked', String(b.dataset.palette === active));
+    });
+    document.querySelectorAll('.palette-btn').forEach(b => { b.title = 'Cor do tema: ' + name; });
+}
+
+function togglePaletteMenu(e) {
+    e.stopPropagation();
+    const wrapper = e.currentTarget.closest('.palette-wrapper');
+    const open = !wrapper.classList.contains('show');
+    closePaletteMenus();
+    if (open) {
+        wrapper.classList.add('show');
+        wrapper.querySelector('.palette-btn').setAttribute('aria-expanded', 'true');
+    }
+}
+
+function closePaletteMenus() {
+    document.querySelectorAll('.palette-wrapper.show').forEach(w => {
+        w.classList.remove('show');
+        w.querySelector('.palette-btn').setAttribute('aria-expanded', 'false');
+    });
+}
+
 function initTheme() {
-    let saved = null;
-    try { saved = localStorage.getItem(THEME_KEY); } catch (e) { }
-    document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+    let savedTheme = null, savedPalette = null;
+    try {
+        savedTheme = localStorage.getItem(THEME_KEY);
+        savedPalette = localStorage.getItem(PALETTE_KEY);
+    } catch (e) { }
+    document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-palette', isPalette(savedPalette) ? savedPalette : DEFAULT_PALETTE);
     updateThemeButtons();
+    renderPaletteMenus();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTheme);
@@ -1361,7 +1435,7 @@ function changeStatus(ns) {
     }
     document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null;
 }
-document.addEventListener('click', () => { document.getElementById('statusDropdown').classList.remove('show'); closeUserDropdown(); });
+document.addEventListener('click', () => { document.getElementById('statusDropdown').classList.remove('show'); closeUserDropdown(); closePaletteMenus(); });
 
 // ─── SYNC MODAL ───
 let syncImportMode = 'merge';
@@ -1914,7 +1988,7 @@ document.addEventListener('keydown', e => {
 
     // Esc apenas fecha: com o autosave, o que foi digitado já está gravado.
     if (e.key === 'Escape') {
-        closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); hideActionToast();
+        closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); hideActionToast(); closePaletteMenus();
         return;
     }
 
