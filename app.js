@@ -10,6 +10,7 @@ let logBaselineReady = false;
 const DEFAULT_FILTERS = ['In Progress', 'To Do', 'Overdue'];
 let activeFilters = new Set(DEFAULT_FILTERS);
 let searchQuery = '';
+let showHiddenRecurring = false;   // revela as recorrências que estão fora da lista
 let statusChangeId = null;
 let gistDataLoaded = false;
 let ganttStartDate = null;
@@ -36,6 +37,144 @@ function dateFromStrGMT3(dateStr) {
 
 function todayGMT3() {
     return dateFromStrGMT3(todayStrGMT3());
+}
+
+// ─── RECORRÊNCIA ───
+// Um evento recorrente é UMA tarefa que caminha no tempo, e não uma cópia por
+// ocorrência: ao ser concluída ela pula para a próxima data e SOME da lista até a
+// véspera — que aqui é uma semana antes do próximo início. O histórico de cada
+// conclusão continua no journal (task_log); a lista mostra só o que está por vir.
+const RECUR_LEAD_DAYS = 7;
+const RECUR_UNITS = ['day', 'week', 'month', 'year'];
+const RECUR_UNIT_LABELS = { day: ['dia', 'dias'], week: ['semana', 'semanas'], month: ['mês', 'meses'], year: ['ano', 'anos'] };
+
+function normalizeRecurrence(r) {
+    if (!r || typeof r !== 'object') return null;
+    const unit = RECUR_UNITS.includes(r.unit) ? r.unit : 'week';
+    const interval = Math.min(999, Math.max(1, Math.round(Number(r.interval) || 1)));
+    return { interval, unit };
+}
+function isRecurring(t) { return !!(t && t.recurrence); }
+function recurrenceKey(r) { const n = normalizeRecurrence(r); return n ? n.interval + '-' + n.unit : ''; }
+function recurrenceLabel(r) {
+    const n = normalizeRecurrence(r);
+    if (!n) return '';
+    const [one, many] = RECUR_UNIT_LABELS[n.unit];
+    return n.interval === 1 ? 'a cada ' + one : 'a cada ' + n.interval + ' ' + many;
+}
+
+/** Soma o período de recorrência a uma data 'YYYY-MM-DD'. */
+function addPeriodToDateStr(ds, r) {
+    const n = normalizeRecurrence(r);
+    if (!n) return ds;
+    if (n.unit === 'day') return addDaysToDateStr(ds, n.interval);
+    if (n.unit === 'week') return addDaysToDateStr(ds, n.interval * 7);
+    // Mês/ano andam pelo calendário, não por 30/365 dias: 31/01 + 1 mês = 28/02
+    // (o dia é aparado no último do mês de destino), e 29/02 + 1 ano = 28/02.
+    const [y, m, d] = ds.split('-').map(Number);
+    const total = y * 12 + (m - 1) + (n.unit === 'month' ? n.interval : n.interval * 12);
+    const ny = Math.floor(total / 12), nm = total % 12;
+    const lastDay = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+    return String(ny).padStart(4, '0') + '-' + String(nm + 1).padStart(2, '0') + '-' + String(Math.min(d, lastDay)).padStart(2, '0');
+}
+function daysBetweenStr(a, b) {
+    return Math.round((dateFromStrGMT3(b).getTime() - dateFromStrGMT3(a).getTime()) / 86400000);
+}
+
+// Concluir com atraso não pode parir uma ocorrência que já nasce vencida: o
+// período é somado até cair no futuro (uma tarefa diária largada por um mês
+// reaparece amanhã, não trinta vezes).
+function nextOccurrenceStart(startDate, r) {
+    const today = todayStrGMT3();
+    let next = addPeriodToDateStr(startDate, r), guard = 0;
+    while (next <= today && guard++ < 1000) next = addPeriodToDateStr(next, r);
+    return next;
+}
+/** Véspera: a data em que a ocorrência volta a aparecer na lista. */
+function revealDateFor(startDate) { return addDaysToDateStr(startDate, -RECUR_LEAD_DAYS); }
+/** `hiddenUntil` preenchido e ainda no futuro = ocorrência fora da lista. */
+function isHiddenRecurrence(t) { return !!(t && t.hiddenUntil && todayStrGMT3() < t.hiddenUntil); }
+
+/**
+ * Conclusão de um evento recorrente: em vez de virar "Concluída" e ficar parada,
+ * a tarefa avança para a próxima ocorrência e se esconde até a véspera dela.
+ * Devolve { before, nextStart, reveal } — `before` alimenta o desfazer do toast.
+ */
+function rolloverRecurrence(t) {
+    if (!isRecurring(t)) return null;
+    const before = taskSnapshot(t);
+    const span = Math.max(0, daysBetweenStr(t.startDate, t.endDate));
+    const today = todayStrGMT3();
+    const nextStart = nextOccurrenceStart(t.startDate, t.recurrence);
+    t.startDate = nextStart;
+    t.endDate = addDaysToDateStr(nextStart, span);   // a duração da ocorrência é preservada
+    t.status = 'To Do';
+    t.lastCompletedAt = nowISOGMT3();
+    const reveal = revealDateFor(nextStart);
+    t.hiddenUntil = reveal > today ? reveal : null;  // recorrência curta (≤ 1 semana) nunca some
+    // A prioridade manual valia para a ocorrência que acabou: ao voltar, a tarefa
+    // é ordenada pela data nova.
+    clearPin(t);
+    t.modifiedAt = nowISOGMT3();
+    return { before, nextStart, reveal: t.hiddenUntil };
+}
+
+/** Devolve à lista as ocorrências cuja véspera chegou, ordenadas pela data. */
+function releaseDueRecurrences() {
+    const today = todayStrGMT3();
+    let changed = false;
+    tasks.forEach(t => {
+        if (!t.hiddenUntil || today < t.hiddenUntil) return;
+        t.hiddenUntil = null;
+        clearPin(t);
+        t.modifiedAt = nowISOGMT3();
+        changed = true;
+    });
+    return changed;
+}
+
+/** Liga/desliga a recorrência de uma tarefa, mantendo a véspera coerente com as datas. */
+function setRecurrence(t, rec) {
+    const norm = normalizeRecurrence(rec);
+    const changed = recurrenceKey(t.recurrence) !== recurrenceKey(norm);
+    t.recurrence = norm;
+    if (!norm) { t.hiddenUntil = null; return changed; }
+    // Datas editadas enquanto a ocorrência estava escondida: a véspera acompanha.
+    if (t.hiddenUntil) {
+        const reveal = revealDateFor(t.startDate);
+        t.hiddenUntil = reveal > todayStrGMT3() ? reveal : null;
+    }
+    return changed;
+}
+
+/**
+ * Único caminho para mudar o status de uma tarefa. Para um evento recorrente,
+ * "Concluída" não é estado final: vira o pulo para a próxima ocorrência.
+ */
+function applyStatusChange(t, newStatus) {
+    if (!t) return null;
+    if (newStatus === 'Completed' && isRecurring(t)) return rolloverRecurrence(t);
+    t.status = newStatus;
+    t.modifiedAt = nowISOGMT3();
+    return null;
+}
+
+// Concluir uma recorrente faz a tarefa sumir da tela: sem este aviso o usuário
+// acha que apagou alguma coisa.
+function announceRollover(t, jump) {
+    if (!t || !jump) return;
+    const msg = jump.reveal
+        ? `“${truncate(t.title, 32)}” concluída · próxima em ${formatDate(jump.nextStart)}, reaparece em ${formatDate(jump.reveal)}.`
+        : `“${truncate(t.title, 32)}” concluída · próxima ocorrência em ${formatDate(jump.nextStart)}.`;
+    showActionToast(msg, 'Desfazer', () => undoRollover(t.id, jump.before), 9000);
+}
+
+function undoRollover(id, before) {
+    const t = tasks.find(tk => tk.id === id);
+    if (!t || !before) return;
+    Object.assign(t, before, { modifiedAt: nowISOGMT3() });
+    saveToStorage();
+    render();
 }
 
 // ─── SHA-256 HASH ───
@@ -79,7 +218,7 @@ async function saveLocalState(source = 'sync') {
 
 // ─── TASK CHANGE LOG (audit journal so data lost to a bad reconciliation is recoverable) ───
 function taskSnapshot(t) {
-    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), createdAt: t.createdAt, modifiedAt: t.modifiedAt };
+    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), pinned: !!t.pinned, recurrence: normalizeRecurrence(t.recurrence), hiddenUntil: t.hiddenUntil || null, lastCompletedAt: t.lastCompletedAt || null, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
 }
 function serializeForLog(t) { return JSON.stringify(taskSnapshot(t)); }
 function initLogBaseline() {
@@ -530,12 +669,20 @@ function scheduleGistPush(delayMs) {
 
 function genId() { return 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5); }
 
-// ─── PRIORIDADE (ordem manual) ───
-// A posição de cada tarefa vive no campo `order`: menor = mais prioritária, mais
-// acima na lista. Usamos passos largos e pontos médios entre vizinhos para que
-// arrastar UMA tarefa altere só ela — renumerar tudo faria toda a lista viajar
-// no sync a cada arrasto.
-const ORDER_STEP = 1000;
+// ─── PRIORIDADE (ordem manual) × DATA ───
+// A lista obedece a dois critérios, nesta ordem:
+//   1. PRIORIDADE MANUAL — a tarefa ARRASTADA vira uma âncora (`pinned`) e passa
+//      a valer pelo número gravado em `order`.
+//   2. DATA — todo o resto é ordenado pelo término (o início desempata) e se
+//      recoloca sozinho a cada render.
+// O truque que faz os dois conviverem é a ESCALA COMUM: `order` não é um índice
+// solto, é uma posição na MESMA régua das datas (dias desde a época, com o início
+// na casa decimal). Arrastar grava o ponto médio entre os vizinhos do momento —
+// daí a âncora ficar onde foi solta, e daí uma tarefa nova ou uma data corrigida
+// entrarem na posição certa em relação a ela, sem precisar reordenar mais nada.
+// Quem não foi arrastado NUNCA recebe `order`: era isso que congelava a lista no
+// primeiro render, deixando as datas novas sem efeito nenhum sobre a ordem.
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function orderValue(v) {
     if (v === null || v === undefined || v === '') return null;
@@ -543,60 +690,61 @@ function orderValue(v) {
     return Number.isFinite(n) ? n : null;
 }
 
+function isPinned(t) { return !!(t && t.pinned) && orderValue(t.order) !== null; }
+function setPin(t, order) { t.pinned = true; t.order = order; }
+/** Solta a tarefa: ela volta a ser ordenada pela data. `true` se algo mudou. */
+function clearPin(t) {
+    if (!t || (!t.pinned && orderValue(t.order) === null)) return false;
+    t.pinned = false;
+    t.order = null;
+    return true;
+}
+
+function dayNumber(ds) { return Math.round(dateFromStrGMT3(ds).getTime() / DAY_MS); }
+
+// Posição da tarefa na régua das datas: dia do término, com o dia do início como
+// fração — dois términos iguais ficam ordenados pelo começo, como em compareByDate.
+function dateKey(t) { return dayNumber(t.endDate) + dayNumber(t.startDate) / 1e6; }
+function sortKey(t) { return isPinned(t) ? orderValue(t.order) : dateKey(t); }
+
 function compareByDate(a, b) {
     if (a.endDate < b.endDate) return -1; if (a.endDate > b.endDate) return 1;
     if (a.startDate < b.startDate) return -1; if (a.startDate > b.startDate) return 1;
     return 0;
 }
 
-// Ordem manual manda; datas só desempatam (e cobrem tarefas ainda sem ordem).
 function compareTasks(a, b) {
-    const ao = orderValue(a.order), bo = orderValue(b.order);
-    if (ao !== null && bo !== null) { if (ao !== bo) return ao - bo; return compareByDate(a, b); }
-    if (ao !== null) return -1;
-    if (bo !== null) return 1;
-    return compareByDate(a, b);
+    const ka = sortKey(a), kb = sortKey(b);
+    if (ka !== kb) return ka - kb;
+    const d = compareByDate(a, b);
+    if (d !== 0) return d;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;   // ordem estável entre gêmeas
 }
 
-// A REGRA PADRÃO DE ENTRADA é a data de término: a tarefa entra logo abaixo da
-// última que NÃO termina depois dela. Numa lista ainda em ordem de data isso dá
-// exatamente a posição da data; numa lista já reordenada à mão, evita que uma
-// tarefa nova salte por cima das que foram priorizadas manualmente.
-// `list` está na ordem em que aparece na tela.
-function dateSlot(list, t) {
-    let i = list.length;
-    while (i > 0 && compareByDate(list[i - 1], t) > 0) i--;
-    return i;
+// Universo ordenável: a recorrência concluída não ocupa lugar na lista até a
+// véspera da próxima ocorrência. A busca ignora esse sumiço — procurar uma tarefa
+// pelo nome e não achar nada é pior do que mostrá-la esmaecida, com a data em que volta.
+function visibleUniverse() {
+    if (showHiddenRecurring || searchQuery.trim()) return tasks.slice();
+    return tasks.filter(t => !isHiddenRecurrence(t));
 }
 
-// Toda tarefa que ainda não tem posição — recém-criada, antiga (anterior a este
-// campo) ou vinda de um dispositivo que não gravava ordem — entra pela regra da
-// data. Depois disso a posição só muda se o usuário arrastar: a ordenação manual
-// tem precedência sobre a padrão.
-function ensureTaskOrder() {
-    const pending = tasks.filter(t => orderValue(t.order) === null);
-    if (pending.length === 0) return false;
-    const placed = tasks.filter(t => orderValue(t.order) !== null).sort(compareTasks);
-    pending.sort(compareByDate).forEach(t => {
-        const i = dateSlot(placed, t);
-        const prev = placed[i - 1], next = placed[i];
-        if (!prev && !next) t.order = ORDER_STEP;
-        else if (!prev) t.order = orderValue(next.order) - ORDER_STEP;
-        else if (!next) t.order = orderValue(prev.order) + ORDER_STEP;
-        else t.order = (orderValue(prev.order) + orderValue(next.order)) / 2;
-        placed.splice(i, 0, t);
-    });
-    // Folga esgotada entre dois vizinhos: redistribui preservando a ordem visível.
-    for (let i = 1; i < placed.length; i++) {
-        if (Math.abs(orderValue(placed[i].order) - orderValue(placed[i - 1].order)) < 1) { renumberOrders(); break; }
-    }
-    return true;
+/**
+ * Datas ajustadas numa tarefa JÁ priorizada: os dois critérios continuam valendo.
+ * A âncora anda o mesmo tanto que a data andou, preservando o deslocamento manual
+ * — quem foi puxado três dias para cima do que a data mandava segue três dias
+ * acima, agora em torno da data nova.
+ */
+function shiftPinForDateChange(t, prevStartDate, prevEndDate) {
+    if (!isPinned(t) || !prevStartDate || !prevEndDate) return;
+    if (t.startDate === prevStartDate && t.endDate === prevEndDate) return;
+    const delta = dateKey(t) - dateKey({ startDate: prevStartDate, endDate: prevEndDate });
+    if (delta) t.order = orderValue(t.order) + delta;
 }
 
-// Só quando os pontos médios esgotam a folga entre dois vizinhos (muitos arrastos
-// no mesmo ponto) redistribuímos os valores, preservando a ordem visível.
-function renumberOrders() {
-    tasks.slice().sort(compareTasks).forEach((t, i) => { t.order = (i + 1) * ORDER_STEP; });
+/** A ordem final da lista: âncoras no ponto em que foram soltas, o resto pela data. */
+function orderedTasks(list) {
+    return (list || visibleUniverse()).slice().sort(compareTasks);
 }
 
 /** Move `draggedId` para logo antes (after=false) ou logo depois (after=true) de `targetId`. */
@@ -604,18 +752,19 @@ function moveTaskTo(draggedId, targetId, after) {
     if (!draggedId || !targetId || draggedId === targetId) return false;
     const dragged = tasks.find(t => t.id === draggedId);
     if (!dragged) return false;
-    ensureTaskOrder();
-    const rest = tasks.filter(t => t.id !== draggedId).sort(compareTasks);
+    const rest = orderedTasks().filter(t => t.id !== draggedId);
     const idx = rest.findIndex(t => t.id === targetId);
     if (idx === -1) return false;
     const pos = after ? idx + 1 : idx;
     const prev = rest[pos - 1], next = rest[pos];
     if (!prev && !next) return false;
-    if (!prev) dragged.order = orderValue(next.order) - ORDER_STEP;
-    else if (!next) dragged.order = orderValue(prev.order) + ORDER_STEP;
-    else dragged.order = (orderValue(prev.order) + orderValue(next.order)) / 2;
-    dragged.modifiedAt = nowISOGMT3();
-    if (prev && next && Math.abs(orderValue(next.order) - orderValue(prev.order)) < 1) renumberOrders();
+    // Ponto médio entre os vizinhos na régua das datas. Um dia inteiro de folga nas
+    // pontas evita que a próxima tarefa a entrar cole na âncora por acidente.
+    const kp = prev ? sortKey(prev) : null, kn = next ? sortKey(next) : null;
+    if (kp === null) setPin(dragged, kn - 1);
+    else if (kn === null) setPin(dragged, kp + 1);
+    else setPin(dragged, (kp + kn) / 2);   // vizinhas com as MESMAS datas empatam:
+    dragged.modifiedAt = nowISOGMT3();     // aí o desempate por data/id decide a ponta
     saveToStorage();
     render();
     return true;
@@ -631,12 +780,23 @@ function moveTaskRelative(id, dir) {
     return moveTaskTo(id, list[j].id, dir > 0);
 }
 
+/** Devolve a tarefa à ordenação por data (clique no alfinete da lista). */
+function unpinTask(id) {
+    const t = tasks.find(tk => tk.id === id);
+    if (!t || !clearPin(t)) return;
+    t.modifiedAt = nowISOGMT3();
+    saveToStorage();
+    render();
+    showActionToast(`“${truncate(t.title, 32)}” voltou para a ordenação por data.`, null, null, 3500);
+}
+
 // ─── RENDER ───
 function render() {
     autoUpdateStatuses();
-    if (ensureTaskOrder()) saveToStorage();
+    if (releaseDueRecurrences()) saveToStorage();
     renderTable();
     renderGantt();
+    syncRecurringFilterButton();
 }
 
 function autoUpdateStatuses() {
@@ -672,13 +832,17 @@ function reconcileStatusAfterDateChange(t, prevStatus) {
     return true;
 }
 
+// Ordena o universo INTEIRO antes de filtrar: a posição de uma flutuante depende
+// das vizinhas, então filtrar primeiro mudaria a ordem conforme os filtros ativos.
 function getFilteredTasks() {
-    return tasks.filter(t => {
+    return orderedTasks().filter(t => {
         const matchFilter = activeFilters.size === 0 || activeFilters.has(t.status);
         const matchSearch = !searchQuery || t.title.toLowerCase().includes(searchQuery.toLowerCase()) || t.description.toLowerCase().includes(searchQuery.toLowerCase());
         return matchFilter && matchSearch;
-    }).sort(compareTasks);
+    });
 }
+
+function countHiddenRecurrences() { return tasks.filter(isHiddenRecurrence).length; }
 
 function statusClass(s) { return { 'Completed': 'status-completed', 'In Progress': 'status-inprogress', 'To Do': 'status-todo', 'Overdue': 'status-overdue' }[s] || 'status-todo'; }
 // Só de apresentação: o status gravado/sincronizado permanece em inglês, para não
@@ -693,6 +857,15 @@ function isFilteringOrSearching() { return activeFilters.size > 0 || !!searchQue
 // Distingue "ainda não há tarefas" de "os filtros escondem tudo" — sem isso o
 // usuário vê "crie sua primeira tarefa" mesmo tendo 40 tarefas cadastradas.
 function emptyStateHTML() {
+    const hiddenCount = countHiddenRecurrences();
+    if (hiddenCount > 0 && !showHiddenRecurring && !isFilteringOrSearching()) {
+        return `<div class="empty-icon">🔁</div>
+      <h3>Nada para hoje</h3>
+      <p>${hiddenCount === 1 ? 'Há 1 tarefa recorrente concluída, que volta' : `Há ${hiddenCount} tarefas recorrentes concluídas, que voltam`} para a lista uma semana antes da próxima ocorrência.</p>
+      <div class="empty-actions">
+        <button class="btn" onclick="toggleHiddenRecurring()">Ver recorrentes agendadas</button>
+      </div>`;
+    }
     if (tasks.length > 0 && isFilteringOrSearching()) {
         return `<div class="empty-icon">🔎</div>
       <h3>Nenhuma tarefa corresponde aos filtros</h3>
@@ -716,10 +889,28 @@ function emptyStateHTML() {
 function clearFiltersAndSearch() {
     activeFilters.clear();
     searchQuery = '';
+    showHiddenRecurring = false;
     const si = document.getElementById('searchInput');
     if (si) si.value = '';
     syncFilterButtons();
     render();
+}
+
+// Alfinete: mostra que a posição foi definida à mão e permite soltar a tarefa de
+// volta para a ordenação por data — sem isso a prioridade manual seria irreversível.
+function pinMarkHTML(t) {
+    if (!isPinned(t)) return '';
+    return `<button type="button" class="pin-mark" title="Prioridade definida à mão — clique para soltar e voltar a ordenar pela data"
+      aria-label="Soltar a prioridade manual" onclick="event.stopPropagation(); unpinTask('${t.id}')">📌</button>`;
+}
+
+function recurBadgeHTML(t) {
+    if (!isRecurring(t)) return '';
+    const hidden = isHiddenRecurrence(t);
+    const label = hidden
+        ? `Recorrente ${recurrenceLabel(t.recurrence)} · fora da lista até ${formatDate(t.hiddenUntil)}`
+        : `Recorrente ${recurrenceLabel(t.recurrence)}`;
+    return `<span class="recur-badge${hidden ? ' waiting' : ''}" title="${esc(label)}" aria-label="${esc(label)}">🔁</span>`;
 }
 
 function renderTable() {
@@ -734,9 +925,9 @@ function renderTable() {
     }
     empty.style.display = 'none';
     tbody.innerHTML = filtered.map(t => `
-    <tr data-reorder-id="${t.id}">
+    <tr data-reorder-id="${t.id}" class="${isHiddenRecurrence(t) ? 'recur-hidden' : ''}">
       <td class="drag-cell">${DRAG_HANDLE_HTML}</td>
-      <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${esc(t.title)}</td>
+      <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${pinMarkHTML(t)}${recurBadgeHTML(t)}${esc(t.title)}</td>
       <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
       <td><span class="status-badge ${statusClass(t.status)}" role="button" tabindex="0" title="Clique para alterar o status"
             onclick="toggleStatusDropdown(event, '${t.id}')"
@@ -792,7 +983,7 @@ function renderGantt() {
             const barLeft = startOffset * dayWidth, barWidth = duration * dayWidth;
             const barVisible = (startOffset + duration > 0) && (startOffset < GANTT_DAYS);
 
-            rowsHTML += `<div class="gantt-row" data-reorder-id="${t.id}"><div class="gantt-row-label">${DRAG_HANDLE_HTML}<span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
+            rowsHTML += `<div class="gantt-row" data-reorder-id="${t.id}"><div class="gantt-row-label">${DRAG_HANDLE_HTML}<span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${recurBadgeHTML(t)}${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
             days.forEach(d => { rowsHTML += `<div class="gantt-cell ${d.getTime() === today.getTime() ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'weekend' : ''}"></div>`; });
 
             if (barVisible) {
@@ -824,7 +1015,8 @@ function showTooltip(e, id) {
     } else {
         document.getElementById('ttDesc').textContent = t.description || 'Sem descrição';
     }
-    document.getElementById('ttDates').textContent = `${formatDate(t.startDate)} → ${formatDate(t.endDate)} · ${statusLabel(t.status)}`;
+    document.getElementById('ttDates').textContent = `${formatDate(t.startDate)} → ${formatDate(t.endDate)} · ${statusLabel(t.status)}`
+        + (isRecurring(t) ? ` · 🔁 ${recurrenceLabel(t.recurrence)}` : '');
     tt.classList.add('show'); positionTooltip(e);
 }
 function hideTooltip() { document.getElementById('ganttTooltip').classList.remove('show'); }
@@ -884,7 +1076,11 @@ document.addEventListener('mouseup', e => {
     const dx = Math.abs(e.clientX - dragState.startX);
     if (dx < 3 && dragState.type === 'move') { const task = tasks.find(t => t.id === dragState.taskId); if (task) { task.startDate = dragState.origStartDate; task.endDate = dragState.origEndDate; } dragState.active = false; editTask(dragState.taskId); return; }
     const draggedTask = tasks.find(t => t.id === dragState.taskId);
-    if (draggedTask) { reconcileStatusAfterDateChange(draggedTask, draggedTask.status); draggedTask.modifiedAt = nowISOGMT3(); }
+    if (draggedTask) {
+        shiftPinForDateChange(draggedTask, dragState.origStartDate, dragState.origEndDate);
+        reconcileStatusAfterDateChange(draggedTask, draggedTask.status);
+        draggedTask.modifiedAt = nowISOGMT3();
+    }
     saveToStorage(); dragState.active = false; render();
 });
 
@@ -987,7 +1183,7 @@ function toggleFilter(filter) {
 
 // Uma única fonte da verdade para o visual dos filtros (classe + aria-pressed).
 function syncFilterButtons() {
-    document.querySelectorAll('.filter-btn').forEach(b => {
+    document.querySelectorAll('.filter-btn:not(#recurFilterBtn)').forEach(b => {
         const f = b.dataset.filter;
         const on = f === 'all' ? activeFilters.size === 0 : activeFilters.has(f);
         b.classList.toggle('active', on);
@@ -995,6 +1191,20 @@ function syncFilterButtons() {
     });
 }
 function searchTasks(q) { searchQuery = q; render(); }
+
+// O botão das recorrentes agendadas só aparece quando existe alguma escondida —
+// senão seria um filtro que nunca muda nada.
+function toggleHiddenRecurring() { showHiddenRecurring = !showHiddenRecurring; render(); }
+function syncRecurringFilterButton() {
+    const btn = document.getElementById('recurFilterBtn');
+    if (!btn) return;
+    const n = countHiddenRecurrences();
+    btn.style.display = (n > 0 || showHiddenRecurring) ? '' : 'none';
+    btn.classList.toggle('active', showHiddenRecurring);
+    btn.setAttribute('aria-pressed', showHiddenRecurring ? 'true' : 'false');
+    const count = document.getElementById('recurFilterCount');
+    if (count) count.textContent = n ? ` (${n})` : '';
+}
 
 // ─── VIEW SWITCH ───
 function switchView(view, btn) {
@@ -1063,6 +1273,7 @@ function openModal(taskId) {
         if (window.setTaskStatus) window.setTaskStatus(existing.status, true);
         document.getElementById('taskStart').value = existing.startDate;
         document.getElementById('taskEnd').value = existing.endDate;
+        if (window.setTaskRecurrence) window.setTaskRecurrence(normalizeRecurrence(existing.recurrence));
         setAutosaveState('saved-idle');
     } else {
         document.getElementById('modalTitle').textContent = 'Nova tarefa';
@@ -1072,8 +1283,10 @@ function openModal(taskId) {
         const td = todayStrGMT3();
         document.getElementById('taskStart').value = td;
         document.getElementById('taskEnd').value = td;
+        if (window.setTaskRecurrence) window.setTaskRecurrence(null);
         setAutosaveState('awaiting-title');
     }
+    updateRecurrenceHint();
     updateTitleHint();
     updateDraftChrome();
     setTimeout(() => document.getElementById('taskTitle').focus(), 100);
@@ -1121,7 +1334,8 @@ function draftDiffersFromOriginal() {
     const t = tasks.find(tk => tk.id === draft.taskId);
     if (!t) return false;
     return t.title !== o.title || t.description !== o.description || t.status !== o.status
-        || t.startDate !== o.startDate || t.endDate !== o.endDate;
+        || t.startDate !== o.startDate || t.endDate !== o.endDate
+        || recurrenceKey(t.recurrence) !== recurrenceKey(o.recurrence);
 }
 
 // Desfaz, de uma vez, tudo que foi alterado desde que o modal abriu.
@@ -1138,6 +1352,11 @@ function revertDraft() {
     t.status = o.status;
     t.startDate = o.startDate;
     t.endDate = o.endDate;
+    t.recurrence = normalizeRecurrence(o.recurrence);
+    t.order = orderValue(o.order);
+    t.pinned = !!o.pinned && t.order !== null;
+    t.hiddenUntil = o.hiddenUntil || null;
+    t.lastCompletedAt = o.lastCompletedAt || null;
     t.modifiedAt = nowISOGMT3();
 
     document.getElementById('taskTitle').value = o.title;
@@ -1145,6 +1364,8 @@ function revertDraft() {
     if (window.setTaskStatus) window.setTaskStatus(o.status, true);
     document.getElementById('taskStart').value = o.startDate;
     document.getElementById('taskEnd').value = o.endDate;
+    if (window.setTaskRecurrence) window.setTaskRecurrence(t.recurrence);
+    updateRecurrenceHint();
 
     draft.wrote = true;
     saveToStorage(1200);
@@ -1160,8 +1381,25 @@ function readTaskForm() {
         description: document.getElementById('taskDesc').value.trim(),
         status: (window.getTaskStatusValue ? window.getTaskStatusValue() : document.getElementById('taskStatus').value) || 'To Do',
         startDate: document.getElementById('taskStart').value,
-        endDate: document.getElementById('taskEnd').value
+        endDate: document.getElementById('taskEnd').value,
+        recurrence: window.getTaskRecurrence ? normalizeRecurrence(window.getTaskRecurrence()) : null
     };
+}
+
+// Prévia do pulo, ao lado dos campos: "concluir" numa tarefa recorrente muda as
+// datas e tira a tarefa da lista, e isso precisa estar dito ANTES do clique.
+function updateRecurrenceHint() {
+    const hint = document.getElementById('recurHint');
+    if (!hint) return;
+    const rec = window.getTaskRecurrence ? normalizeRecurrence(window.getTaskRecurrence()) : null;
+    if (!rec) { hint.className = 'field-hint'; hint.textContent = ''; return; }
+    const start = document.getElementById('taskStart').value || todayStrGMT3();
+    const next = nextOccurrenceStart(start, rec);
+    const reveal = revealDateFor(next);
+    hint.className = 'field-hint info show';
+    hint.textContent = reveal > todayStrGMT3()
+        ? `Ao concluir, a tarefa pula para ${formatDate(next)} e sai da lista até ${formatDate(reveal)} (uma semana antes).`
+        : `Ao concluir, a tarefa pula para ${formatDate(next)} e segue na lista (a próxima ocorrência está a menos de uma semana).`;
 }
 
 // Chamado a cada alteração de campo (também pelo script inline do index.html).
@@ -1169,6 +1407,7 @@ function readTaskForm() {
 function notifyDraftChange(opts) {
     if (!draft.open) return;
     updateTitleHint();
+    updateRecurrenceHint();
     clearTimeout(draft.timer);
     draft.timer = null;
 
@@ -1202,6 +1441,7 @@ function commitDraft() {
     }
 
     draft.committing = true;
+    let jump = null;
     try {
         const now = nowISOGMT3();
         if (existing) {
@@ -1213,16 +1453,25 @@ function commitDraft() {
                 && existing.description === form.description
                 && existing.status === form.status
                 && existing.startDate === startDate
-                && existing.endDate === endDate;
+                && existing.endDate === endDate
+                && recurrenceKey(existing.recurrence) === recurrenceKey(form.recurrence);
             if (unchanged) { setAutosaveState(draft.wrote ? 'saved' : 'saved-idle'); return false; }
             const prevStatus = existing.status;
+            const beforeCommit = taskSnapshot(existing);
             existing.title = form.title;
             existing.description = form.description;
             existing.status = form.status;
             existing.startDate = startDate;
             existing.endDate = endDate;
+            setRecurrence(existing, form.recurrence);
+            shiftPinForDateChange(existing, beforeCommit.startDate, beforeCommit.endDate);
             reconcileStatusAfterDateChange(existing, prevStatus);
             existing.modifiedAt = now;
+            // "Concluída" numa recorrente é o pulo para a próxima ocorrência.
+            if (form.status === 'Completed') {
+                jump = applyStatusChange(existing, 'Completed');
+                if (jump) jump.before = beforeCommit;
+            }
         } else {
             const today = todayStrGMT3();
             let startDate = form.startDate || today;
@@ -1230,26 +1479,36 @@ function commitDraft() {
             if (endDate < startDate) { const tmp = startDate; startDate = endDate; endDate = tmp; }
             const created = {
                 id: genId(), title: form.title, description: form.description, status: form.status,
-                startDate, endDate, order: null, createdAt: now, modifiedAt: now
+                startDate, endDate, order: null, pinned: false,
+                recurrence: normalizeRecurrence(form.recurrence), hiddenUntil: null, lastCompletedAt: null,
+                createdAt: now, modifiedAt: now
             };
             tasks.push(created);
-            ensureTaskOrder();   // posiciona pela data de término, sem esperar o render
+            // Nasce flutuante: a posição sai da data, aqui e a cada ajuste seguinte.
             draft.taskId = created.id;   // ← vínculo por id: daqui em diante é sempre update
             draft.createdHere = true;
+            if (form.status === 'Completed') jump = applyStatusChange(created, 'Completed');
         }
 
         draft.wrote = true;
         saveToStorage(DRAFT_GIST_DELAY_MS);
         render();
 
-        // render() pode reclassificar o status (autoUpdateStatuses); reflete isso nos
-        // botões, senão o modal mostraria um status diferente do que está gravado.
+        // render() pode reclassificar o status (autoUpdateStatuses), e o pulo de uma
+        // recorrente reescreve datas e status; reflete tudo isso nos campos, senão o
+        // modal mostraria algo diferente do que está gravado.
         const stored = tasks.find(t => t.id === draft.taskId);
         if (stored && window.setTaskStatus && stored.status !== form.status) {
             window.setTaskStatus(stored.status, true);
         }
+        if (stored && jump) {
+            document.getElementById('taskStart').value = stored.startDate;
+            document.getElementById('taskEnd').value = stored.endDate;
+            announceRollover(stored, jump);
+        }
 
         updateDraftChrome();
+        updateRecurrenceHint();
         updateTitleHint();
         setAutosaveState((form.startDate && form.endDate) ? 'saved' : 'dates-kept');
         return true;
@@ -1319,7 +1578,8 @@ function updateDraftChrome() {
     const meta = document.getElementById('taskMeta');
     if (meta) {
         if (t) {
-            meta.textContent = `Criada em ${formatDateTime(t.createdAt)}  ·  última alteração ${formatDateTime(t.modifiedAt)}`;
+            meta.textContent = `Criada em ${formatDateTime(t.createdAt)}  ·  última alteração ${formatDateTime(t.modifiedAt)}`
+                + (t.lastCompletedAt ? `  ·  concluída pela última vez em ${formatDateTime(t.lastCompletedAt)}` : '');
             meta.classList.add('show');
         } else {
             meta.textContent = '';
@@ -1469,7 +1729,11 @@ function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id;
 function changeStatus(ns) {
     if (statusChangeId) {
         const t = tasks.find(tk => tk.id === statusChangeId);
-        if (t) { t.status = ns; t.modifiedAt = nowISOGMT3(); saveToStorage(); render(); }
+        if (t) {
+            const jump = applyStatusChange(t, ns);
+            saveToStorage(); render();
+            announceRollover(t, jump);
+        }
     }
     document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null;
 }
@@ -1504,14 +1768,30 @@ function setImportMode(m) { syncImportMode = m; document.getElementById('importM
 function triggerFileImport() { document.getElementById('csvInput').click(); }
 function showSyncStatus(id, msg, type) { const el = document.getElementById(id); el.textContent = msg; el.className = 'sync-status ' + type; }
 function hideSyncStatus(id) { document.getElementById(id).className = 'sync-status'; }
-function generateSyncExport() { const exportData = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), createdAt: t.createdAt, modifiedAt: t.modifiedAt })); const text = JSON.stringify(exportData, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
+function generateSyncExport() { const exportData = tasks.map(taskSnapshot); const text = JSON.stringify(exportData, null, 2); document.getElementById('syncExportText').value = text; showSyncStatus('syncExportStatus', `${tasks.length} tarefa(s) gerada(s) em JSON.`, 'info'); }
 function copySyncExport() { const ta = document.getElementById('syncExportText'); if (!ta.value) generateSyncExport(); navigator.clipboard.writeText(ta.value).then(() => { showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }).catch(() => { ta.select(); document.execCommand('copy'); showSyncStatus('syncExportStatus', '✓ JSON copiado!', 'success'); }); }
 function downloadSyncExport() { if (!document.getElementById('syncExportText').value) generateSyncExport(); const text = document.getElementById('syncExportText').value; const blob = new Blob([text], { type: 'application/json;charset=utf-8;' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `taskflow_${todayStrGMT3()}.json`; a.click(); URL.revokeObjectURL(url); showSyncStatus('syncExportStatus', '✓ Arquivo JSON baixado!', 'success'); }
 
+// MIGRAÇÃO: até aqui o app gravava `order` em TODAS as tarefas, arrastadas ou
+// não — não há como saber quais foram de fato priorizadas à mão. Sem o marcador
+// `pinned` a tarefa entra solta, e a lista volta a ser regida pela data; quem
+// quiser fixar alguma, arrasta de novo (uma vez).
 function normalizeTasks(arr) {
     const vs = ['Completed', 'In Progress', 'To Do', 'Overdue'];
     const now = nowISOGMT3();
-    return arr.map(t => ({ id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(), status: vs.includes(t.status) ? t.status : 'To Do', startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(), order: orderValue(t.order), createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now })).filter(t => t.title);
+    return arr.map(t => {
+        const pinned = t.pinned === true && orderValue(t.order) !== null;
+        return {
+            id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(),
+            status: vs.includes(t.status) ? t.status : 'To Do',
+            startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(),
+            order: pinned ? orderValue(t.order) : null, pinned,
+            recurrence: normalizeRecurrence(t.recurrence),
+            hiddenUntil: t.recurrence && t.hiddenUntil ? t.hiddenUntil : null,
+            lastCompletedAt: t.lastCompletedAt || null,
+            createdAt: t.createdAt || now, modifiedAt: t.modifiedAt || now
+        };
+    }).filter(t => t.title);
 }
 function parseImportedJSON(text) {
     const parsed = JSON.parse(text);
@@ -1537,7 +1817,7 @@ function readGistTombstones(data) {
     return parseTombstonesContent(data.files['taskflow.deleted.json'].content);
 }
 function buildGistFiles() {
-    const taskArr = tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), createdAt: t.createdAt, modifiedAt: t.modifiedAt }));
+    const taskArr = tasks.map(taskSnapshot);
     return {
         'taskflow.json': { content: JSON.stringify(taskArr, null, 2) },
         'taskflow.deleted.json': { content: JSON.stringify(tombstones, null, 2) }
@@ -1555,7 +1835,10 @@ function mergeTaskLists(incoming) {
             if (incMod > exMod) {
                 ex.status = inc.status; ex.startDate = inc.startDate; ex.endDate = inc.endDate;
                 ex.description = inc.description || ex.description;
-                if (orderValue(inc.order) !== null) ex.order = orderValue(inc.order);
+                ex.recurrence = normalizeRecurrence(inc.recurrence);
+                ex.hiddenUntil = ex.recurrence ? (inc.hiddenUntil || null) : null;
+                ex.lastCompletedAt = inc.lastCompletedAt || ex.lastCompletedAt || null;
+                if (inc.pinned) { ex.pinned = true; ex.order = orderValue(inc.order); }
                 ex.modifiedAt = inc.modifiedAt;
                 if (inc.createdAt && (!ex.createdAt || inc.createdAt < ex.createdAt)) ex.createdAt = inc.createdAt;
                 updated++;
@@ -1622,7 +1905,7 @@ function reconcileWithRemote(localTasks, localTombstones, remoteTasks, remoteTom
         // A cópia vencedora pode vir de um dispositivo que ainda não gravava a
         // prioridade: nesse caso a ordem local é mantida, e não zerada.
         const out = { ...chosen };
-        if (orderValue(out.order) === null && localMatch && orderValue(localMatch.order) !== null) out.order = orderValue(localMatch.order);
+        if (!out.pinned && localMatch && localMatch.pinned) { out.pinned = true; out.order = orderValue(localMatch.order); }
         merged.push(out);
     }
 
@@ -2065,7 +2348,10 @@ async function purgeOldCompletedTasks(showConfirm = true) {
     const cutoffDate = new Date(Date.now() + TZ_OFFSET_MS);
     cutoffDate.setDate(cutoffDate.getDate() - 30);
     const cutoffStr = cutoffDate.toISOString().slice(0, 10);
-    const count = tasks.filter(t => t.status === 'Completed' && t.endDate <= cutoffStr).length;
+    // Evento recorrente nunca é varrido: ele só fica "Concluída" entre o desfazer
+    // de um pulo e a próxima gravação, e apagá-lo aí levaria junto a série inteira.
+    const eligible = t => t.status === 'Completed' && t.endDate <= cutoffStr && !isRecurring(t);
+    const count = tasks.filter(eligible).length;
     if (showConfirm) {
         if (count === 0) { showPurgeToast('✅ Nenhuma tarefa elegível para remoção.', 'info'); return 0; }
         const plural = count === 1 ? 'tarefa' : 'tarefas';
@@ -2074,8 +2360,8 @@ async function purgeOldCompletedTasks(showConfirm = true) {
     }
     if (count === 0) return 0;
     const purgeTs = nowISOGMT3();
-    tasks.forEach(t => { if (t.status === 'Completed' && t.endDate <= cutoffStr) tombstones.push({ id: t.id, title: t.title, deletedAt: purgeTs }); });
-    tasks = tasks.filter(t => !(t.status === 'Completed' && t.endDate <= cutoffStr));
+    tasks.forEach(t => { if (eligible(t)) tombstones.push({ id: t.id, title: t.title, deletedAt: purgeTs }); });
+    tasks = tasks.filter(t => !eligible(t));
     saveToStorage();
     render();
     if (showConfirm) { const plural2 = count === 1 ? 'tarefa removida' : 'tarefas removidas'; showPurgeToast(`🗑️ ${count} ${plural2} com sucesso.`, 'success'); }

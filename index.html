@@ -560,6 +560,32 @@
     .form-row { display: flex; gap: 14px; }
     .form-row .form-group { flex: 1; }
 
+    /* ── RECORRÊNCIA (modal) ─────────────────────────────────── */
+    .recur-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .form-group label.recur-check {
+      display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+      font-size: 13px; font-weight: 500; color: var(--text);
+      text-transform: none; letter-spacing: 0; margin: 0;
+    }
+    .recur-check input { width: auto; accent-color: var(--accent); cursor: pointer; }
+    .recur-fields { display: inline-flex; align-items: center; gap: 8px; }
+    .recur-fields[hidden] { display: none; }
+    .recur-fields .recur-sep { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+    .form-group .recur-fields input[type="number"] { width: 76px; padding: 8px 10px; }
+    .form-group .recur-fields select { width: auto; min-width: 118px; padding: 8px 10px; }
+
+    /* Marcadores na lista: 🔁 recorrente, 📌 prioridade fixada à mão */
+    .recur-badge { font-size: 12px; margin-right: 6px; cursor: help; }
+    .recur-badge.waiting { opacity: 0.55; }
+    .pin-mark {
+      background: none; border: 0; padding: 0; margin-right: 6px;
+      font-size: 11px; line-height: 1; cursor: pointer; opacity: 0.7;
+    }
+    .pin-mark:hover { opacity: 1; }
+    .task-table tr.recur-hidden .task-title-cell,
+    .task-table tr.recur-hidden .task-desc-cell,
+    .task-table tr.recur-hidden .date-cell { opacity: 0.6; font-style: italic; }
+
     /* Aviso de inversão de datas */
     .date-swap-notice {
       font-size: 11px;
@@ -1121,6 +1147,12 @@
         <button class="filter-btn active" data-filter="Overdue" onclick="toggleFilter('Overdue', this)" aria-pressed="true">
           <span class="dot" style="background:var(--overdue);width:8px;height:8px;border-radius:50%;display:inline-block"></span>Atrasadas
         </button>
+        <!-- Só aparece quando há recorrência concluída fora da lista (app.js) -->
+        <button class="filter-btn" id="recurFilterBtn" data-filter="recurring-hidden" style="display:none"
+                onclick="toggleHiddenRecurring()" aria-pressed="false"
+                title="Mostrar as tarefas recorrentes já concluídas, que voltam uma semana antes da próxima ocorrência">
+          🔁 Agendadas<span id="recurFilterCount"></span>
+        </button>
       </div>
       <div class="toolbar-right">
         <input type="search" id="searchInput" class="search-input" placeholder="Buscar tarefas…  (/)"
@@ -1344,6 +1376,29 @@
           <div class="form-group"><label for="taskEnd">Data de término</label><input type="date" id="taskEnd" oninput="handleDateInput()"></div>
         </div>
         <div class="date-swap-notice" id="dateSwapNotice">⇄ Datas invertidas automaticamente (início era posterior ao término).</div>
+
+        <!-- RECORRÊNCIA -->
+        <div class="form-group" style="margin-bottom:0">
+          <label id="recurGroupLabel">Recorrência</label>
+          <div class="recur-row" role="group" aria-labelledby="recurGroupLabel">
+            <label class="recur-check">
+              <input type="checkbox" id="taskRecurring" onchange="handleRecurrenceInput()">
+              <span>Evento recorrente</span>
+            </label>
+            <div class="recur-fields" id="recurFields" hidden>
+              <span class="recur-sep">a cada</span>
+              <input type="number" id="taskRecurInterval" min="1" max="999" step="1" value="1"
+                     aria-label="Intervalo de recorrência" oninput="handleRecurrenceInput()">
+              <select id="taskRecurUnit" aria-label="Unidade do período de recorrência" onchange="handleRecurrenceInput()">
+                <option value="day">dia(s)</option>
+                <option value="week">semana(s)</option>
+                <option value="month">mês(es)</option>
+                <option value="year">ano(s)</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-hint" id="recurHint"></div>
+        </div>
       </div>
       <div class="modal-footer modal-footer-split">
         <div class="autosave-chip" id="autosaveChip" role="status" aria-live="polite">
@@ -1645,6 +1700,32 @@
       return document.getElementById('taskStatus').value || 'To Do';
     }
 
+    /* ── RECORRÊNCIA ─────────────────────────────────────────── */
+    /**
+     * Um só caminho para os três controles (marcar, intervalo, unidade): grava na
+     * hora, como status e datas, e reescreve a prévia do próximo pulo.
+     */
+    function handleRecurrenceInput() {
+      const on = document.getElementById('taskRecurring').checked;
+      document.getElementById('recurFields').hidden = !on;
+      if (window.notifyDraftChange) window.notifyDraftChange({ immediate: true });
+    }
+
+    /** Lê a recorrência do formulário — null quando a caixa está desmarcada. */
+    function getTaskRecurrence() {
+      if (!document.getElementById('taskRecurring').checked) return null;
+      const n = parseInt(document.getElementById('taskRecurInterval').value, 10);
+      return { interval: (isNaN(n) || n < 1) ? 1 : n, unit: document.getElementById('taskRecurUnit').value };
+    }
+
+    /** Preenche os campos ao abrir/reverter uma tarefa (chamado pelo app.js). */
+    function setTaskRecurrence(rec) {
+      document.getElementById('taskRecurring').checked = !!rec;
+      document.getElementById('recurFields').hidden = !rec;
+      document.getElementById('taskRecurInterval').value = rec ? rec.interval : 1;
+      document.getElementById('taskRecurUnit').value = rec ? rec.unit : 'week';
+    }
+
     /* ── INVERSÃO AUTOMÁTICA DE DATAS ────────────────────────── */
     function handleDateInput() {
       const startEl  = document.getElementById('taskStart');
@@ -1715,6 +1796,10 @@
     /** Expõe setTaskStatus para o app.js poder setar o status ao editar uma tarefa. */
     window.setTaskStatus     = setTaskStatus;
     window.getTaskStatusValue = getTaskStatusValue;
+
+    /** Recorrência: lida na gravação e escrita ao abrir/reverter a tarefa. */
+    window.getTaskRecurrence = getTaskRecurrence;
+    window.setTaskRecurrence = setTaskRecurrence;
   </script>
 
 </body>
