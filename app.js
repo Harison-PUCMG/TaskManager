@@ -1781,11 +1781,15 @@ function normalizeTasks(arr) {
     const now = nowISOGMT3();
     return arr.map(t => {
         const pinned = t.pinned === true && orderValue(t.order) !== null;
+        // Registro legado grava `order` mas não conhece `pinned`: a ausência do pin
+        // não é uma afirmação, e a reconciliação não pode tratá-la como um "soltar o
+        // alfinete". Marcador só de memória — taskSnapshot não o serializa.
+        const pinnedUnknown = t.pinned === undefined;
         return {
             id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(),
             status: vs.includes(t.status) ? t.status : 'To Do',
             startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(),
-            order: pinned ? orderValue(t.order) : null, pinned,
+            order: pinned ? orderValue(t.order) : null, pinned, pinnedUnknown,
             recurrence: normalizeRecurrence(t.recurrence),
             hiddenUntil: t.recurrence && t.hiddenUntil ? t.hiddenUntil : null,
             lastCompletedAt: t.lastCompletedAt || null,
@@ -1838,7 +1842,10 @@ function mergeTaskLists(incoming) {
                 ex.recurrence = normalizeRecurrence(inc.recurrence);
                 ex.hiddenUntil = ex.recurrence ? (inc.hiddenUntil || null) : null;
                 ex.lastCompletedAt = inc.lastCompletedAt || ex.lastCompletedAt || null;
+                // Mesma regra da reconciliação: a cópia nova manda no pin, inclusive
+                // para soltá-lo — só o registro legado preserva a prioridade local.
                 if (inc.pinned) { ex.pinned = true; ex.order = orderValue(inc.order); }
+                else if (!inc.pinnedUnknown) { ex.pinned = false; ex.order = null; }
                 ex.modifiedAt = inc.modifiedAt;
                 if (inc.createdAt && (!ex.createdAt || inc.createdAt < ex.createdAt)) ex.createdAt = inc.createdAt;
                 updated++;
@@ -1903,9 +1910,13 @@ function reconcileWithRemote(localTasks, localTombstones, remoteTasks, remoteTom
         if (!localMatch) added++;
         else if (chosen === rt) updated++;
         // A cópia vencedora pode vir de um dispositivo que ainda não gravava a
-        // prioridade: nesse caso a ordem local é mantida, e não zerada.
+        // prioridade: nesse caso a ordem local é mantida, e não zerada. Mas quando a
+        // vencedora CONHECE o campo e diz que não está pinada, isso é um alfinete
+        // solto em outro dispositivo — tem de valer aqui também, senão o pin vira um
+        // trinco de mão única e os dois dispositivos divergem para sempre.
         const out = { ...chosen };
-        if (!out.pinned && localMatch && localMatch.pinned) { out.pinned = true; out.order = orderValue(localMatch.order); }
+        if (!out.pinned && out.pinnedUnknown && localMatch && localMatch.pinned) { out.pinned = true; out.order = orderValue(localMatch.order); }
+        out.pinnedUnknown = false;   // decidido: daqui para a frente `pinned` é a verdade
         merged.push(out);
     }
 
