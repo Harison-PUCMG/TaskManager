@@ -218,7 +218,7 @@ async function saveLocalState(source = 'sync') {
 
 // ─── TASK CHANGE LOG (audit journal so data lost to a bad reconciliation is recoverable) ───
 function taskSnapshot(t) {
-    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, order: orderValue(t.order), pinned: !!t.pinned, recurrence: normalizeRecurrence(t.recurrence), hiddenUntil: t.hiddenUntil || null, lastCompletedAt: t.lastCompletedAt || null, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
+    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, priority: normalizePriority(t.priority), order: orderValue(t.order), pinned: !!t.pinned, recurrence: normalizeRecurrence(t.recurrence), hiddenUntil: t.hiddenUntil || null, lastCompletedAt: t.lastCompletedAt || null, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
 }
 function serializeForLog(t) { return JSON.stringify(taskSnapshot(t)); }
 function initLogBaseline() {
@@ -669,12 +669,17 @@ function scheduleGistPush(delayMs) {
 
 function genId() { return 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5); }
 
-// ─── PRIORIDADE (ordem manual) × DATA ───
-// A lista obedece a dois critérios, nesta ordem:
-//   1. PRIORIDADE MANUAL — a tarefa ARRASTADA vira uma âncora (`pinned`) e passa
+// ─── NÍVEL DE PRIORIDADE × ORDEM MANUAL × DATA ───
+// A lista obedece a três critérios, nesta ordem:
+//   0. NÍVEL DE PRIORIDADE (`priority`: alta, média ou baixa) — manda sobre tudo.
+//      Toda tarefa nasce média; alta sempre vem antes, baixa sempre depois.
+// Dentro de cada nível:
+//   1. ORDEM MANUAL — a tarefa ARRASTADA vira uma âncora (`pinned`) e passa
 //      a valer pelo número gravado em `order`.
 //   2. DATA — todo o resto é ordenado pelo término (o início desempata) e se
 //      recoloca sozinho a cada render.
+// Arrastar para dentro de outro nível troca o nível da tarefa: o que se vê na
+// lista depois de soltar é sempre o que fica gravado.
 // O truque que faz os dois conviverem é a ESCALA COMUM: `order` não é um índice
 // solto, é uma posição na MESMA régua das datas (dias desde a época, com o início
 // na casa decimal). Arrastar grava o ponto médio entre os vizinhos do momento —
@@ -683,6 +688,16 @@ function genId() { return 'task_' + Date.now().toString(36) + '_' + Math.random(
 // Quem não foi arrastado NUNCA recebe `order`: era isso que congelava a lista no
 // primeiro render, deixando as datas novas sem efeito nenhum sobre a ordem.
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+const PRIORITIES = ['high', 'medium', 'low'];   // na ordem em que aparecem na lista
+const DEFAULT_PRIORITY = 'medium';
+const PRIORITY_LABELS = { high: 'Alta', medium: 'Média', low: 'Baixa' };
+
+function normalizePriority(p) { return PRIORITIES.includes(p) ? p : DEFAULT_PRIORITY; }
+function priorityRank(t) { return PRIORITIES.indexOf(normalizePriority(t && t.priority)); }
+function priorityLabel(p) { return PRIORITY_LABELS[normalizePriority(p)]; }
+/** Grava um nível escolhido pelo usuário — a partir daí ele deixa de ser "desconhecido". */
+function assignPriority(t, p) { t.priority = normalizePriority(p); t.priorityUnknown = false; }
 
 function orderValue(v) {
     if (v === null || v === undefined || v === '') return null;
@@ -714,6 +729,8 @@ function compareByDate(a, b) {
 }
 
 function compareTasks(a, b) {
+    const pa = priorityRank(a), pb = priorityRank(b);
+    if (pa !== pb) return pa - pb;
     const ka = sortKey(a), kb = sortKey(b);
     if (ka !== kb) return ka - kb;
     const d = compareByDate(a, b);
@@ -742,7 +759,7 @@ function shiftPinForDateChange(t, prevStartDate, prevEndDate) {
     if (delta) t.order = orderValue(t.order) + delta;
 }
 
-/** A ordem final da lista: âncoras no ponto em que foram soltas, o resto pela data. */
+/** A ordem final da lista: por nível; dentro dele, âncoras onde foram soltas e o resto pela data. */
 function orderedTasks(list) {
     return (list || visibleUniverse()).slice().sort(compareTasks);
 }
@@ -756,12 +773,19 @@ function moveTaskTo(draggedId, targetId, after) {
     const idx = rest.findIndex(t => t.id === targetId);
     if (idx === -1) return false;
     const pos = after ? idx + 1 : idx;
-    const prev = rest[pos - 1], next = rest[pos];
-    if (!prev && !next) return false;
+    // Quem manda no nível é a tarefa sobre a qual se soltou: cair no meio das
+    // altas faz da arrastada uma alta. Só as vizinhas do MESMO nível entram na
+    // conta da posição — as de outro nível estão separadas pelo critério 0.
+    const priority = normalizePriority(rest[idx].priority);
+    const same = t => t && normalizePriority(t.priority) === priority;
+    const prev = same(rest[pos - 1]) ? rest[pos - 1] : null;
+    const next = same(rest[pos]) ? rest[pos] : null;
+    assignPriority(dragged, priority);
     // Ponto médio entre os vizinhos na régua das datas. Um dia inteiro de folga nas
     // pontas evita que a próxima tarefa a entrar cole na âncora por acidente.
     const kp = prev ? sortKey(prev) : null, kn = next ? sortKey(next) : null;
-    if (kp === null) setPin(dragged, kn - 1);
+    if (kp === null && kn === null) setPin(dragged, dateKey(dragged));   // sozinha no nível
+    else if (kp === null) setPin(dragged, kn - 1);
     else if (kn === null) setPin(dragged, kp + 1);
     else setPin(dragged, (kp + kn) / 2);   // vizinhas com as MESMAS datas empatam:
     dragged.modifiedAt = nowISOGMT3();     // aí o desempate por data/id decide a ponta
@@ -778,6 +802,23 @@ function moveTaskRelative(id, dir) {
     const j = i + dir;
     if (j < 0 || j >= list.length) return false;
     return moveTaskTo(id, list[j].id, dir > 0);
+}
+
+/**
+ * Troca o nível de prioridade (atalho da lista). A âncora manual valia entre as
+ * vizinhas do nível antigo: no nível novo a tarefa entra pela data, e quem quiser
+ * afiná-la ali arrasta de novo.
+ */
+function setTaskPriority(id, priority) {
+    const t = tasks.find(tk => tk.id === id);
+    const p = normalizePriority(priority);
+    if (!t || normalizePriority(t.priority) === p) return false;
+    assignPriority(t, p);
+    clearPin(t);
+    t.modifiedAt = nowISOGMT3();
+    saveToStorage();
+    render();
+    return true;
 }
 
 /** Devolve a tarefa à ordenação por data (clique no alfinete da lista). */
@@ -926,7 +967,7 @@ function renderTable() {
     empty.style.display = 'none';
     tbody.innerHTML = filtered.map(t => `
     <tr data-reorder-id="${t.id}" class="${isHiddenRecurrence(t) ? 'recur-hidden' : ''}">
-      <td class="drag-cell">${DRAG_HANDLE_HTML}</td>
+      <td class="drag-cell"><div class="reorder-tools">${DRAG_HANDLE_HTML}${priorityBtnHTML(t)}</div></td>
       <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${pinMarkHTML(t)}${recurBadgeHTML(t)}${esc(t.title)}</td>
       <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
       <td><span class="status-badge ${statusClass(t.status)}" role="button" tabindex="0" title="Clique para alterar o status"
@@ -983,7 +1024,7 @@ function renderGantt() {
             const barLeft = startOffset * dayWidth, barWidth = duration * dayWidth;
             const barVisible = (startOffset + duration > 0) && (startOffset < GANTT_DAYS);
 
-            rowsHTML += `<div class="gantt-row" data-reorder-id="${t.id}"><div class="gantt-row-label">${DRAG_HANDLE_HTML}<span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${recurBadgeHTML(t)}${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
+            rowsHTML += `<div class="gantt-row" data-reorder-id="${t.id}"><div class="gantt-row-label">${DRAG_HANDLE_HTML}${priorityBtnHTML(t)}<span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${recurBadgeHTML(t)}${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
             days.forEach(d => { rowsHTML += `<div class="gantt-cell ${d.getTime() === today.getTime() ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'weekend' : ''}"></div>`; });
 
             if (barVisible) {
@@ -1087,9 +1128,57 @@ document.addEventListener('mouseup', e => {
 // ─── REORDENAR POR PRIORIDADE (arrastar pelo punho) ───
 // Só o punho arrasta: a linha inteira continua clicável para abrir a tarefa, e o
 // arrasto horizontal das barras do Gantt (que muda datas) segue intocado.
-const DRAG_HANDLE_HTML = '<button type="button" class="drag-handle" draggable="true" title="Arraste para mudar a prioridade (ou use as setas ↑ e ↓ com o punho em foco)" aria-label="Mover tarefa para cima ou para baixo">'
+const DRAG_HANDLE_HTML = '<button type="button" class="drag-handle" draggable="true" title="Arraste para mudar a posição — soltar entre tarefas de outro nível de prioridade adota esse nível (ou use as setas ↑ e ↓ com o punho em foco)" aria-label="Mover tarefa para cima ou para baixo">'
     + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + '<line x1="12" y1="4" x2="12" y2="20"/><polyline points="8 7 12 3 16 7"/><polyline points="8 17 12 21 16 17"/></svg></button>';
+
+// Atalho do nível de prioridade, colado ao punho: o punho afina a posição dentro
+// do nível, este botão troca de nível. Abre o mesmo menu na tabela e no Gantt.
+const PRIORITY_ICONS = {
+    high: '<polyline points="6 15 12 9 18 15"/><polyline points="6 20 12 14 18 20"/>',
+    medium: '<line x1="6" y1="12" x2="18" y2="12"/>',
+    low: '<polyline points="6 9 12 15 18 9"/>'
+};
+function priorityIconSVG(p) {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PRIORITY_ICONS[normalizePriority(p)]}</svg>`;
+}
+function priorityBtnHTML(t) {
+    const p = normalizePriority(t.priority);
+    const label = `Prioridade ${priorityLabel(p).toLowerCase()} — clique para trocar`;
+    return `<button type="button" class="priority-btn prio-${p}" title="${label}" aria-label="${label}" aria-haspopup="menu"
+      onclick="togglePriorityMenu(event, '${t.id}')">${priorityIconSVG(p)}</button>`;
+}
+
+let priorityMenuTaskId = null;
+function closePriorityMenu() {
+    const m = document.getElementById('priorityMenu');
+    if (m) m.classList.remove('show');
+    priorityMenuTaskId = null;
+}
+function togglePriorityMenu(e, id) {
+    e.stopPropagation();
+    const menu = document.getElementById('priorityMenu');
+    if (!menu) return;
+    if (menu.classList.contains('show') && priorityMenuTaskId === id) { closePriorityMenu(); return; }
+    const t = tasks.find(tk => tk.id === id);
+    if (!t) return;
+    priorityMenuTaskId = id;
+    const current = normalizePriority(t.priority);
+    menu.querySelectorAll('[data-priority]').forEach(btn => {
+        btn.setAttribute('aria-checked', btn.dataset.priority === current ? 'true' : 'false');
+    });
+    const rect = e.currentTarget.getBoundingClientRect();
+    menu.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+    menu.style.left = (rect.left + window.scrollX) + 'px';
+    menu.classList.add('show');
+    const focusBtn = menu.querySelector('[aria-checked="true"]');
+    if (focusBtn) focusBtn.focus();
+}
+function choosePriority(p) {
+    const id = priorityMenuTaskId;
+    closePriorityMenu();
+    if (id) setTaskPriority(id, p);
+}
 
 const reorderDrag = { id: null, rowEl: null, listEl: null, targetEl: null, after: false };
 
@@ -1274,6 +1363,7 @@ function openModal(taskId) {
         document.getElementById('taskStart').value = existing.startDate;
         document.getElementById('taskEnd').value = existing.endDate;
         if (window.setTaskRecurrence) window.setTaskRecurrence(normalizeRecurrence(existing.recurrence));
+        if (window.setTaskPriorityInput) window.setTaskPriorityInput(normalizePriority(existing.priority), true);
         setAutosaveState('saved-idle');
     } else {
         document.getElementById('modalTitle').textContent = 'Nova tarefa';
@@ -1284,6 +1374,7 @@ function openModal(taskId) {
         document.getElementById('taskStart').value = td;
         document.getElementById('taskEnd').value = td;
         if (window.setTaskRecurrence) window.setTaskRecurrence(null);
+        if (window.setTaskPriorityInput) window.setTaskPriorityInput(DEFAULT_PRIORITY, true);
         setAutosaveState('awaiting-title');
     }
     updateRecurrenceHint();
@@ -1335,6 +1426,7 @@ function draftDiffersFromOriginal() {
     if (!t) return false;
     return t.title !== o.title || t.description !== o.description || t.status !== o.status
         || t.startDate !== o.startDate || t.endDate !== o.endDate
+        || normalizePriority(t.priority) !== o.priority
         || recurrenceKey(t.recurrence) !== recurrenceKey(o.recurrence);
 }
 
@@ -1353,6 +1445,7 @@ function revertDraft() {
     t.startDate = o.startDate;
     t.endDate = o.endDate;
     t.recurrence = normalizeRecurrence(o.recurrence);
+    assignPriority(t, o.priority);
     t.order = orderValue(o.order);
     t.pinned = !!o.pinned && t.order !== null;
     t.hiddenUntil = o.hiddenUntil || null;
@@ -1365,6 +1458,7 @@ function revertDraft() {
     document.getElementById('taskStart').value = o.startDate;
     document.getElementById('taskEnd').value = o.endDate;
     if (window.setTaskRecurrence) window.setTaskRecurrence(t.recurrence);
+    if (window.setTaskPriorityInput) window.setTaskPriorityInput(t.priority, true);
     updateRecurrenceHint();
 
     draft.wrote = true;
@@ -1382,6 +1476,7 @@ function readTaskForm() {
         status: (window.getTaskStatusValue ? window.getTaskStatusValue() : document.getElementById('taskStatus').value) || 'To Do',
         startDate: document.getElementById('taskStart').value,
         endDate: document.getElementById('taskEnd').value,
+        priority: normalizePriority(window.getTaskPriorityValue ? window.getTaskPriorityValue() : DEFAULT_PRIORITY),
         recurrence: window.getTaskRecurrence ? normalizeRecurrence(window.getTaskRecurrence()) : null
     };
 }
@@ -1454,6 +1549,7 @@ function commitDraft() {
                 && existing.status === form.status
                 && existing.startDate === startDate
                 && existing.endDate === endDate
+                && normalizePriority(existing.priority) === form.priority
                 && recurrenceKey(existing.recurrence) === recurrenceKey(form.recurrence);
             if (unchanged) { setAutosaveState(draft.wrote ? 'saved' : 'saved-idle'); return false; }
             const prevStatus = existing.status;
@@ -1463,6 +1559,8 @@ function commitDraft() {
             existing.status = form.status;
             existing.startDate = startDate;
             existing.endDate = endDate;
+            // Mesma regra do atalho da lista: trocar de nível solta a âncora manual.
+            if (normalizePriority(existing.priority) !== form.priority) { assignPriority(existing, form.priority); clearPin(existing); }
             setRecurrence(existing, form.recurrence);
             shiftPinForDateChange(existing, beforeCommit.startDate, beforeCommit.endDate);
             reconcileStatusAfterDateChange(existing, prevStatus);
@@ -1479,7 +1577,7 @@ function commitDraft() {
             if (endDate < startDate) { const tmp = startDate; startDate = endDate; endDate = tmp; }
             const created = {
                 id: genId(), title: form.title, description: form.description, status: form.status,
-                startDate, endDate, order: null, pinned: false,
+                startDate, endDate, priority: form.priority, order: null, pinned: false,
                 recurrence: normalizeRecurrence(form.recurrence), hiddenUntil: null, lastCompletedAt: null,
                 createdAt: now, modifiedAt: now
             };
@@ -1737,7 +1835,7 @@ function changeStatus(ns) {
     }
     document.getElementById('statusDropdown').classList.remove('show'); statusChangeId = null;
 }
-document.addEventListener('click', () => { document.getElementById('statusDropdown').classList.remove('show'); closeUserDropdown(); closePaletteMenus(); });
+document.addEventListener('click', () => { document.getElementById('statusDropdown').classList.remove('show'); closePriorityMenu(); closeUserDropdown(); closePaletteMenus(); });
 
 // ─── SYNC MODAL ───
 let syncImportMode = 'merge';
@@ -1785,10 +1883,14 @@ function normalizeTasks(arr) {
         // não é uma afirmação, e a reconciliação não pode tratá-la como um "soltar o
         // alfinete". Marcador só de memória — taskSnapshot não o serializa.
         const pinnedUnknown = t.pinned === undefined;
+        // Idem para o nível: registro sem o campo entra como média, mas sem
+        // desmentir o nível que outro dispositivo já tenha gravado.
+        const priorityUnknown = !PRIORITIES.includes(t.priority);
         return {
             id: t.id || genId(), title: String(t.title || '').trim(), description: String(t.description || '').trim(),
             status: vs.includes(t.status) ? t.status : 'To Do',
             startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(),
+            priority: normalizePriority(t.priority), priorityUnknown,
             order: pinned ? orderValue(t.order) : null, pinned, pinnedUnknown,
             recurrence: normalizeRecurrence(t.recurrence),
             hiddenUntil: t.recurrence && t.hiddenUntil ? t.hiddenUntil : null,
@@ -1846,6 +1948,7 @@ function mergeTaskLists(incoming) {
                 // para soltá-lo — só o registro legado preserva a prioridade local.
                 if (inc.pinned) { ex.pinned = true; ex.order = orderValue(inc.order); }
                 else if (!inc.pinnedUnknown) { ex.pinned = false; ex.order = null; }
+                if (!inc.priorityUnknown) ex.priority = normalizePriority(inc.priority);
                 ex.modifiedAt = inc.modifiedAt;
                 if (inc.createdAt && (!ex.createdAt || inc.createdAt < ex.createdAt)) ex.createdAt = inc.createdAt;
                 updated++;
@@ -1917,6 +2020,8 @@ function reconcileWithRemote(localTasks, localTombstones, remoteTasks, remoteTom
         const out = { ...chosen };
         if (!out.pinned && out.pinnedUnknown && localMatch && localMatch.pinned) { out.pinned = true; out.order = orderValue(localMatch.order); }
         out.pinnedUnknown = false;   // decidido: daqui para a frente `pinned` é a verdade
+        if (out.priorityUnknown && localMatch && !localMatch.priorityUnknown) out.priority = normalizePriority(localMatch.priority);
+        out.priorityUnknown = false;
         merged.push(out);
     }
 
@@ -2320,7 +2425,7 @@ document.addEventListener('keydown', e => {
 
     // Esc apenas fecha: com o autosave, o que foi digitado já está gravado.
     if (e.key === 'Escape') {
-        closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); hideActionToast(); closePaletteMenus();
+        closeModal(); closeSyncModal(); closeProfileModal(); closeMdViewer(); hideActionToast(); closePaletteMenus(); closePriorityMenu();
         return;
     }
 

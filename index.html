@@ -969,8 +969,45 @@
     .palette-range:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 3px; }
 
     /* -- PRIORIDADE: REORDENACAO POR ARRASTO ------------------- */
-    .task-table td.drag-cell { width: 34px; padding: 14px 2px 14px 12px; }
-    .task-table th.drag-col  { width: 34px; padding-right: 2px; padding-left: 12px; }
+    .task-table td.drag-cell { width: 62px; padding: 14px 2px 14px 12px; }
+    .task-table th.drag-col  { width: 62px; padding-right: 2px; padding-left: 12px; }
+    .reorder-tools { display: flex; align-items: center; gap: 2px; }
+
+    /* -- NIVEL DE PRIORIDADE (atalho ao lado do punho + modal) -- */
+    .priority-btn {
+      width: 22px; height: 26px; flex-shrink: 0; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      border: none; border-radius: var(--radius-sm); background: transparent;
+      cursor: pointer; transition: background 0.15s, color 0.15s, opacity 0.15s;
+    }
+    .priority-btn svg { width: 14px; height: 14px; pointer-events: none; }
+    .priority-btn:hover { background: var(--surface-hover); }
+    .priority-btn:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+    .prio-high   { color: var(--overdue); }
+    .prio-medium { color: var(--text-dim); opacity: 0.55; }
+    .prio-low    { color: var(--inprogress); }
+    .priority-btn.prio-medium:hover { opacity: 1; }
+    .priority-menu {
+      position: absolute; background: var(--surface-elevated);
+      border: 1px solid var(--border-light); border-radius: var(--radius);
+      padding: 6px; box-shadow: var(--shadow); z-index: 200;
+      min-width: 150px; display: none;
+    }
+    .priority-menu.show { display: block; }
+    .priority-option {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 8px 12px; border: none; background: none; border-radius: var(--radius-sm);
+      color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .priority-option:hover, .priority-option[aria-checked="true"] { background: var(--surface-hover); }
+    .priority-option:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: -2px; }
+    .priority-option svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .priority-option .prio-medium { opacity: 1; }
+    .status-btn[data-priority] svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .status-btn[data-priority="high"].active   { background: var(--overdue-bg);    color: var(--overdue);    border-color: var(--overdue-border); }
+    .status-btn[data-priority="medium"].active { background: var(--surface-hover); color: var(--text);       border-color: var(--border-light); }
+    .status-btn[data-priority="low"].active    { background: var(--inprogress-bg); color: var(--inprogress); border-color: var(--inprogress-border); }
     .drag-handle {
       width: 26px; height: 26px; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
@@ -1370,6 +1407,23 @@
           <input type="hidden" id="taskStatus" value="To Do">
         </div>
 
+        <!-- PRIORIDADE: principal critério da ordem da lista (a data vem depois) -->
+        <div class="form-group">
+          <label id="priorityGroupLabel">Prioridade</label>
+          <div class="status-btn-group" id="priorityBtnGroup" role="group" aria-labelledby="priorityGroupLabel">
+            <button type="button" class="status-btn" data-priority="high" onclick="setTaskPriorityInput('high')" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/><polyline points="6 20 12 14 18 20"/></svg>Alta
+            </button>
+            <button type="button" class="status-btn" data-priority="medium" onclick="setTaskPriorityInput('medium')" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="12" x2="18" y2="12"/></svg>Média
+            </button>
+            <button type="button" class="status-btn" data-priority="low" onclick="setTaskPriorityInput('low')" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>Baixa
+            </button>
+          </div>
+          <input type="hidden" id="taskPriority" value="medium">
+        </div>
+
         <!-- Datas com aviso de inversão automática -->
         <div class="form-row">
           <div class="form-group"><label for="taskStart">Data de início</label><input type="date" id="taskStart" oninput="handleDateInput()"></div>
@@ -1462,6 +1516,13 @@
     <button class="status-option" onclick="changeStatus('In Progress')"><span class="dot" style="background:var(--inprogress)"></span>Em andamento</button>
     <button class="status-option" onclick="changeStatus('Completed')"><span class="dot" style="background:var(--completed)"></span>Concluída</button>
     <button class="status-option" onclick="changeStatus('Overdue')"><span class="dot" style="background:var(--overdue)"></span>Atrasada</button>
+  </div>
+
+  <!-- MENU DE PRIORIDADE (atalho ao lado do punho, na tabela e no Gantt) -->
+  <div class="priority-menu" id="priorityMenu" role="menu" aria-label="Nível de prioridade" onclick="event.stopPropagation()">
+    <button type="button" class="priority-option" role="menuitemradio" data-priority="high" onclick="choosePriority('high')"><span class="prio-high"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/><polyline points="6 20 12 14 18 20"/></svg></span>Alta</button>
+    <button type="button" class="priority-option" role="menuitemradio" data-priority="medium" onclick="choosePriority('medium')"><span class="prio-medium"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="12" x2="18" y2="12"/></svg></span>Média</button>
+    <button type="button" class="priority-option" role="menuitemradio" data-priority="low" onclick="choosePriority('low')"><span class="prio-low"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>Baixa</button>
   </div>
 
   <!-- GANTT TOOLTIP -->
@@ -1700,6 +1761,22 @@
       return document.getElementById('taskStatus').value || 'To Do';
     }
 
+    /* ── PRIORIDADE POR BOTÕES ───────────────────────────────── */
+    /** Mesmo padrão do status: botão ativo + campo oculto lido pelo app.js. */
+    function setTaskPriorityInput(priority, silent) {
+      document.getElementById('taskPriority').value = priority;
+      document.querySelectorAll('#priorityBtnGroup .status-btn').forEach(function (btn) {
+        var on = btn.dataset.priority === priority;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      if (!silent && window.notifyDraftChange) window.notifyDraftChange({ immediate: true });
+    }
+
+    function getTaskPriorityValue() {
+      return document.getElementById('taskPriority').value || 'medium';
+    }
+
     /* ── RECORRÊNCIA ─────────────────────────────────────────── */
     /**
      * Um só caminho para os três controles (marcar, intervalo, unidade): grava na
@@ -1800,6 +1877,10 @@
     /** Recorrência: lida na gravação e escrita ao abrir/reverter a tarefa. */
     window.getTaskRecurrence = getTaskRecurrence;
     window.setTaskRecurrence = setTaskRecurrence;
+
+    /** Prioridade: lida na gravação e escrita ao abrir/reverter a tarefa. */
+    window.setTaskPriorityInput = setTaskPriorityInput;
+    window.getTaskPriorityValue = getTaskPriorityValue;
   </script>
 
 </body>
