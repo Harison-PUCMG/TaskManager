@@ -6,6 +6,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TaskFlow — Gestão de Tarefas</title>
 
+  <!-- PWA: caminhos RELATIVOS, pois o app vive em /TaskManager/ e não na raiz do domínio -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0d9488">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="TaskFlow">
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js', { scope: './' })
+          .catch(function (e) { console.warn('SW não registrado:', e); });
+      });
+    }
+    // Pede ao navegador que não apague o IndexedDB (onde ficam as tarefas) por falta de espaço
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persisted().then(function (ok) { if (!ok) navigator.storage.persist(); });
+    }
+  </script>
+
   <!-- Aplica tema e paleta salvos antes de qualquer pintura, senão a tela pisca
        nas cores erradas. A lista de paletas vive em app.js (PALETTES); aqui só o
        filtro que impede um valor inventado de virar atributo. -->
