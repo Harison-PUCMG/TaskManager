@@ -1268,7 +1268,7 @@
         <button class="modal-close" onclick="closeSyncModal()">&#x2715;</button>
       </div>
       <div class="sync-tabs">
-        <button class="sync-tab active" id="syncTabGist" onclick="switchSyncTab('gist')">☁ Gist Sync</button>
+        <button class="sync-tab active" id="syncTabGist" onclick="switchSyncTab('gist')">☁ Nuvem</button>
         <button class="sync-tab" id="syncTabExport" onclick="switchSyncTab('export')">📤 Exportar</button>
         <button class="sync-tab" id="syncTabImport" onclick="switchSyncTab('import')">📥 Importar / Mesclar</button>
       </div>
@@ -1278,19 +1278,14 @@
           <div id="gistStatusBadge"></div>
           <div class="gist-config-section" id="gistConfigSection">
             <div class="form-group">
-              <label>GitHub Personal Access Token</label>
-              <input type="password" id="gistToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-              <div class="gist-config-hint">Crie um token em <a href="https://github.com/settings/tokens/new?scopes=gist&description=TaskFlow+Sync" target="_blank" rel="noopener">github.com/settings/tokens</a> com permissão <code>gist</code>.</div>
-            </div>
-            <div class="form-group">
-              <label>Gist ID ou URL</label>
-              <input type="text" id="gistUrl" placeholder="ID do Gist ou URL completa" autocomplete="off">
-              <div class="gist-config-hint">Cole o ID ou a URL completa do Gist. O arquivo <code>taskflow.json</code> será criado no primeiro push.</div>
+              <label>Chave de sincronização</label>
+              <input type="password" id="gistToken" placeholder="Cole a chave ou gere uma nova" autocomplete="off">
+              <div class="gist-config-hint">A chave identifica e protege seus dados na nuvem (Vercel). Use a <strong>mesma chave</strong> em todos os dispositivos e não a compartilhe: quem a tiver pode ler e alterar suas tarefas.</div>
             </div>
             <div class="gist-actions">
               <button class="btn btn-primary" onclick="saveGistConfig()">Salvar Configuração</button>
               <button class="btn" onclick="testGistConnection()">Testar Conexão</button>
-              <button class="btn" onclick="createNewGist()">Criar Novo Gist</button>
+              <button class="btn" onclick="createNewGist()">Gerar Nova Chave</button>
             </div>
           </div>
           <div id="gistSyncSection" style="display:none">
@@ -1299,13 +1294,13 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                   <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
                   <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
-                </svg>Enviar para Gist
+                </svg>Enviar para a nuvem
               </button>
               <button class="btn" onclick="pullFromGist()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                   <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>Baixar do Gist
+                </svg>Baixar da nuvem
               </button>
             </div>
             <div class="auto-sync-toggle">
@@ -1314,7 +1309,7 @@
             </div>
             <div class="gist-sync-info" id="gistSyncInfo"></div>
             <div class="gist-danger-zone">
-              <button class="btn btn-danger" onclick="clearGistConfig()" style="font-size:12px">🗑️ Remover Configuração Gist</button>
+              <button class="btn btn-danger" onclick="clearGistConfig()" style="font-size:12px">🗑️ Remover Chave deste Dispositivo</button>
             </div>
           </div>
           <div class="sync-status" id="gistSyncStatus"></div>

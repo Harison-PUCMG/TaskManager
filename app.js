@@ -2063,83 +2063,79 @@ function importFileJSON(event) {
     reader.readAsText(file); event.target.value = '';
 }
 
-// ─── GIST SYNC ───
+// ─── CLOUD SYNC (Vercel: função /api/sync + Redis do Marketplace) ───
+// Os nomes "Gist" (funções, tabela gist_config, ids do DOM) foram mantidos para
+// não quebrar bancos locais já existentes: gist_token guarda a chave de sync e
+// gist_id guarda o marcador CLOUD_MARKER. Configs antigas do GitHub Gist (gist_id
+// diferente do marcador) são ignoradas e o usuário só precisa gerar uma chave.
+const CLOUD_ENDPOINT = '/api/sync';
+const CLOUD_MARKER = 'cloud';
+const SYNC_KEY_MIN = 24;
+
+function cloudFetch(cfg, { method = 'GET', files, etag } = {}) {
+    const headers = { 'X-Sync-Key': cfg.token };
+    if (etag) headers['If-None-Match'] = etag;
+    const init = { method, headers };
+    if (files) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify({ files }); }
+    return fetch(CLOUD_ENDPOINT, init);
+}
+async function cloudError(resp) {
+    const err = await resp.json().catch(() => ({}));
+    return new Error(err.error || 'HTTP ' + resp.status);
+}
+function generateSyncKey() {
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function loadGistConfig() {
     if (!db || !currentUser) return null;
     const res = db.exec("SELECT gist_token, gist_id, auto_sync, last_sync FROM gist_config WHERE user_id = ?", [currentUser.id]);
     if (res.length > 0 && res[0].values.length > 0) {
         const r = res[0].values[0];
+        if (r[1] !== CLOUD_MARKER) return null;
         return { token: r[0], gistId: r[1], autoSync: !!r[2], lastSync: r[3] || '' };
     }
     return null;
 }
 
-function extractGistId(input) {
-    if (!input) return '';
-    input = input.trim();
-    const urlMatch = input.match(/gist\.github\.com\/(?:[^/]+\/)?([a-f0-9]+)/i);
-    if (urlMatch) return urlMatch[1];
-    if (/^[a-f0-9]+$/i.test(input)) return input;
-    return input;
-}
-
 async function saveGistConfig() {
     if (!db || !currentUser) return;
     const token = document.getElementById('gistToken').value.trim();
-    const rawUrl = document.getElementById('gistUrl').value.trim();
-    const gistId = extractGistId(rawUrl);
-    if (!token) { showSyncStatus('gistSyncStatus', 'Informe o GitHub Personal Access Token.', 'error'); return; }
-    if (!gistId) { showSyncStatus('gistSyncStatus', 'Informe o ID ou URL do Gist.', 'error'); return; }
+    if (token.length < SYNC_KEY_MIN) { showSyncStatus('gistSyncStatus', `A chave de sincronização deve ter ao menos ${SYNC_KEY_MIN} caracteres. Use "Gerar Nova Chave".`, 'error'); return; }
     db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, COALESCE((SELECT auto_sync FROM gist_config WHERE user_id = ?), 0), COALESCE((SELECT last_sync FROM gist_config WHERE user_id = ?), ''))",
-        [currentUser.id, token, gistId, currentUser.id, currentUser.id]);
+        [currentUser.id, token, CLOUD_MARKER, currentUser.id, currentUser.id]);
     await saveDBToIDB();
     showSyncStatus('gistSyncStatus', '✓ Configuração salva com sucesso.', 'success');
     refreshGistUI();
 }
 
 async function createNewGist() {
-    const token = document.getElementById('gistToken').value.trim();
-    if (!token) { showSyncStatus('gistSyncStatus', 'Informe o token antes de criar um novo Gist.', 'error'); return; }
-    showSyncStatus('gistSyncStatus', 'Criando Gist...', 'info');
-    try {
-        const resp = await fetch('https://api.github.com/gists', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'TaskFlow Sync — ' + (currentUser.name || 'User'), public: false, files: buildGistFiles() }) });
-        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
-        const data = await resp.json();
-        const gistId = data.id;
-        db.run("INSERT OR REPLACE INTO gist_config (user_id, gist_token, gist_id, auto_sync, last_sync) VALUES (?, ?, ?, 0, ?)", [currentUser.id, token, gistId, nowISOGMT3()]);
-        await saveDBToIDB();
-        document.getElementById('gistUrl').value = gistId;
-        showSyncStatus('gistSyncStatus', `✓ Gist criado! ID: ${gistId}`, 'success');
-        refreshGistUI();
-    } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao criar Gist: ' + err.message, 'error'); }
+    const key = generateSyncKey();
+    document.getElementById('gistToken').value = key;
+    showSyncStatus('gistSyncStatus', 'Chave gerada. Guarde-a para conectar outros dispositivos e clique em "Salvar Configuração".', 'info');
 }
 
 async function testGistConnection() {
     const token = document.getElementById('gistToken').value.trim();
-    const rawUrl = document.getElementById('gistUrl').value.trim();
-    const gistId = extractGistId(rawUrl);
-    if (!token || !gistId) { showSyncStatus('gistSyncStatus', 'Preencha token e ID/URL do Gist.', 'error'); return; }
+    if (token.length < SYNC_KEY_MIN) { showSyncStatus('gistSyncStatus', 'Informe a chave de sincronização.', 'error'); return; }
     showSyncStatus('gistSyncStatus', 'Testando conexão...', 'info');
     try {
-        const resp = await fetch('https://api.github.com/gists/' + gistId, { headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json' } });
-        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
+        const resp = await cloudFetch({ token });
+        if (!resp.ok) throw await cloudError(resp);
         const data = await resp.json();
-        const hasFile = data.files && data.files['taskflow.json'];
-        const owner = data.owner ? data.owner.login : 'desconhecido';
-        if (hasFile) { showSyncStatus('gistSyncStatus', `✓ Conexão OK! Gist de @${owner}, arquivo taskflow.json encontrado.`, 'success'); }
-        else { showSyncStatus('gistSyncStatus', `⚠ Gist de @${owner} encontrado, mas sem arquivo taskflow.json.`, 'info'); }
+        const has = data.files && data.files['taskflow.json'];
+        showSyncStatus('gistSyncStatus', has ? '✓ Conexão OK! Dados encontrados na nuvem.' : '✓ Conexão OK! Ainda não há dados para esta chave — serão criados no primeiro envio.', has ? 'success' : 'info');
     } catch (err) { showSyncStatus('gistSyncStatus', '✗ Falha na conexão: ' + err.message, 'error'); }
 }
 
 async function pushToGist() {
     const cfg = loadGistConfig();
-    if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error'); return; }
-    showSyncStatus('gistSyncStatus', 'Sincronizando com Gist...', 'info');
+    if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure a chave de sincronização primeiro.', 'error'); return; }
+    showSyncStatus('gistSyncStatus', 'Sincronizando com a nuvem...', 'info');
     try {
         // Pull and merge before pushing to avoid overwriting newer remote data
-        const getResp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
-        });
+        const getResp = await cloudFetch(cfg);
         if (getResp.ok) {
             const getData = await getResp.json();
             const remoteTasks = readGistTasks(getData);
@@ -2149,27 +2145,27 @@ async function pushToGist() {
                 render();
             }
         }
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: buildGistFiles() }) });
-        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
+        const resp = await cloudFetch(cfg, { method: 'PUT', files: buildGistFiles() });
+        if (!resp.ok) throw await cloudError(resp);
         await saveLocalState();
         const syncTime = nowISOGMT3();
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
-        showSyncStatus('gistSyncStatus', `✓ ${tasks.length} tarefa(s) sincronizada(s) com o Gist.`, 'success');
+        showSyncStatus('gistSyncStatus', `✓ ${tasks.length} tarefa(s) sincronizada(s) com a nuvem.`, 'success');
         refreshGistUI();
     } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao sincronizar: ' + err.message, 'error'); }
 }
 
 async function pullFromGist() {
     const cfg = loadGistConfig();
-    if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure o Gist primeiro.', 'error'); return; }
-    showSyncStatus('gistSyncStatus', 'Baixando do Gist...', 'info');
+    if (!cfg) { showSyncStatus('gistSyncStatus', 'Configure a chave de sincronização primeiro.', 'error'); return; }
+    showSyncStatus('gistSyncStatus', 'Baixando da nuvem...', 'info');
     try {
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' } });
-        if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + resp.status); }
+        const resp = await cloudFetch(cfg);
+        if (!resp.ok) throw await cloudError(resp);
         const data = await resp.json();
         const remoteTasks = readGistTasks(data);
-        if (!remoteTasks) { showSyncStatus('gistSyncStatus', '⚠ Arquivo taskflow.json não encontrado no Gist.', 'info'); return; }
+        if (!remoteTasks) { showSyncStatus('gistSyncStatus', '⚠ Ainda não há dados na nuvem para esta chave.', 'info'); return; }
         const { merged, tombstones: ts, added, updated } = reconcileWithRemote(tasks, tombstones, remoteTasks, readGistTombstones(data));
         tasks = merged; tombstones = ts;
         render();
@@ -2178,7 +2174,7 @@ async function pullFromGist() {
         db.run("UPDATE gist_config SET last_sync = ? WHERE user_id = ?", [syncTime, currentUser.id]);
         await saveDBToIDB();
         const parts = []; if (added) parts.push(`${added} adicionada(s)`); if (updated) parts.push(`${updated} atualizada(s)`); if (!added && !updated) parts.push('nenhuma alteração');
-        showSyncStatus('gistSyncStatus', `✓ Mesclagem do Gist: ${parts.join(', ')}.`, 'success');
+        showSyncStatus('gistSyncStatus', `✓ Mesclagem da nuvem: ${parts.join(', ')}.`, 'success');
         refreshGistUI();
     } catch (err) { showSyncStatus('gistSyncStatus', '✗ Erro ao baixar: ' + err.message, 'error'); }
 }
@@ -2190,9 +2186,7 @@ async function silentPushToGist() {
     clearTimeout(saveToStorage._gistTimer);
     try {
         // Pull remote first to avoid overwriting newer data
-        const getResp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
-        });
+        const getResp = await cloudFetch(cfg);
         if (!getResp.ok) {
             // Can't verify remote state — DON'T push (would risk clobbering remote).
             // Local cache already holds the change, so retry later instead of dropping it.
@@ -2209,7 +2203,7 @@ async function silentPushToGist() {
             clearTimeout(saveToStorage._gistTimer); // prevent re-push from autoUpdateStatuses
         }
         // Push merged result (tasks + tombstones)
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' }, body: JSON.stringify({ files: buildGistFiles() }) });
+        const resp = await cloudFetch(cfg, { method: 'PUT', files: buildGistFiles() });
         if (resp.ok) {
             await saveLocalState();
             const syncTime = nowISOGMT3();
@@ -2236,7 +2230,7 @@ async function toggleAutoSync(checked) {
 }
 
 async function clearGistConfig() {
-    if (!confirm('Remover a configuração do Gist deste dispositivo?\n\n(O Gist no GitHub permanece intacto.)')) return;
+    if (!confirm('Remover a chave de sincronização deste dispositivo?\n\n(Os dados na nuvem permanecem intactos.)')) return;
     stopGistPolling();
     db.run("DELETE FROM gist_config WHERE user_id = ?", [currentUser.id]);
     await saveDBToIDB();
@@ -2252,29 +2246,28 @@ function refreshGistUI() {
     const infoEl = document.getElementById('gistSyncInfo');
 
     if (cfg && cfg.token && cfg.gistId) {
-        badge.innerHTML = '<span class="gist-connected">&#9679; Gist Conectado</span>';
+        badge.innerHTML = '<span class="gist-connected">&#9679; Nuvem conectada</span>';
         configSection.style.display = 'none';
         syncSection.style.display = 'block';
         document.getElementById('autoSyncCheck').checked = cfg.autoSync;
-        let info = `<strong>Gist ID:</strong> <span class="last-sync">${cfg.gistId}</span>`;
+        let info = `<strong>Chave:</strong> <span class="last-sync">${cfg.token.slice(0, 4)}…${cfg.token.slice(-4)}</span>`;
         if (cfg.lastSync) { const d = new Date(cfg.lastSync); info += `<br><strong>Última sincronização:</strong> <span class="last-sync">${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR')}</span>`; }
         else { info += `<br><strong>Última sincronização:</strong> <em style="color:var(--text-dim)">nunca</em>`; }
         if (cfg.autoSync && gistPoll.running) { info += `<br><strong>Observador:</strong> <span style="color:var(--completed)">&#9679; ativo</span> <span style="color:var(--text-dim);font-size:11px">(polling 60s com ETag)</span>`; }
         info += `<br><br><button class="btn" style="font-size:11px;padding:4px 10px" onclick="showGistEditForm()">Alterar Configuração</button>`;
         infoEl.innerHTML = info;
     } else {
-        badge.innerHTML = '<span class="gist-disconnected">&#9675; Gist não configurado</span>';
+        badge.innerHTML = '<span class="gist-disconnected">&#9675; Nuvem não configurada</span>';
         configSection.style.display = 'block';
         syncSection.style.display = 'none';
         document.getElementById('gistToken').value = '';
-        document.getElementById('gistUrl').value = '';
     }
 }
 
 function showGistEditForm() {
     const cfg = loadGistConfig();
     document.getElementById('gistConfigSection').style.display = 'block';
-    if (cfg) { document.getElementById('gistToken').value = cfg.token; document.getElementById('gistUrl').value = cfg.gistId; }
+    if (cfg) document.getElementById('gistToken').value = cfg.token;
 }
 
 // ─── GIST POLLING ───
@@ -2290,9 +2283,7 @@ async function loadTasksFromGist() {
     const cfg = loadGistConfig();
     if (!cfg) { gistDataLoaded = true; return; }
     try {
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
-        });
+        const resp = await cloudFetch(cfg);
         if (!resp.ok) { gistDataLoaded = true; return; } // offline — keep local cache, sync later
         const newEtag = resp.headers.get('ETag');
         if (newEtag) gistPoll.etag = newEtag;
@@ -2333,9 +2324,7 @@ async function gistPollTick() {
     const cfg = loadGistConfig();
     if (!cfg || !cfg.autoSync) { stopGistPolling(); return; }
     try {
-        const headers = { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' };
-        if (gistPoll.etag) headers['If-None-Match'] = gistPoll.etag;
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, { headers });
+        const resp = await cloudFetch(cfg, { etag: gistPoll.etag });
         if (resp.status === 304) { gistPoll.lastCheck = Date.now(); return; }
         if (!resp.ok) return;
         const newEtag = resp.headers.get('ETag');
@@ -2370,7 +2359,7 @@ function showPollToast(added, updated) {
         document.body.appendChild(toast);
     }
     const parts = []; if (added) parts.push(`${added} nova(s)`); if (updated) parts.push(`${updated} atualizada(s)`);
-    toast.textContent = '⟳ Gist sync: ' + parts.join(', ');
+    toast.textContent = '⟳ Sync: ' + parts.join(', ');
     toast.style.opacity = '1'; toast.style.transform = 'translateY(0)';
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(10px)'; }, 4000);
@@ -2380,9 +2369,7 @@ async function reconcileOnReturn() {
     const cfg = loadGistConfig();
     if (!cfg) return;
     try {
-        const resp = await fetch('https://api.github.com/gists/' + cfg.gistId, {
-            headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.v3+json' }
-        });
+        const resp = await cloudFetch(cfg);
         if (!resp.ok) return;
         const etag = resp.headers.get('ETag');
         if (etag) gistPoll.etag = etag;

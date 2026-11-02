@@ -1,20 +1,19 @@
 /* TaskFlow — Service Worker
  *
- * Fica em /TaskManager/sw.js, então o escopo dele é /TaskManager/ e não
- * interfere em outros repositórios publicados em harison-pucmg.github.io.
+ * Fica na raiz do site (Vercel), então o escopo dele é todo o domínio do app.
  *
  * Estratégias:
  *  - Arquivos do próprio app (index.html, app.js, ícones): network-first.
  *    Online, sempre pega a versão nova do GitHub Pages; offline, usa o cache.
  *  - Bibliotecas do cdnjs (sql.js + .wasm, marked, DOMPurify): cache-first.
  *    As URLs têm versão fixa, então o conteúdo nunca muda.
- *  - Qualquer outra coisa (api.github.com do Gist Sync, etc.): passa direto,
- *    sem cache.
+ *  - /api/* (sincronização na nuvem) e qualquer outra coisa: passa direto,
+ *    sem cache — nunca se serve dado de sync velho.
  *
  * Ao trocar a versão de alguma biblioteca do CDN, atualize CDN_ASSETS e
  * incremente VERSION.
  */
-const VERSION = 'taskflow-v1';
+const VERSION = 'taskflow-v2';
 const APP_CACHE = `${VERSION}-app`;
 const CDN_CACHE = `${VERSION}-cdn`;
 
@@ -78,7 +77,8 @@ self.addEventListener('fetch', event => {
   }
 
   // Arquivos do app (mesmo escopo): network-first com fallback
-  if (url.origin === self.location.origin && url.pathname.startsWith(new URL('./', self.location).pathname)) {
+  const scopePath = new URL('./', self.location).pathname;
+  if (url.origin === self.location.origin && url.pathname.startsWith(scopePath) && !url.pathname.startsWith(scopePath + 'api/')) {
     event.respondWith((async () => {
       const cache = await caches.open(APP_CACHE);
       try {
@@ -95,5 +95,5 @@ self.addEventListener('fetch', event => {
       }
     })());
   }
-  // Demais requisições (ex.: api.github.com) seguem sem interceptação.
+  // Demais requisições (ex.: /api/sync) seguem sem interceptação.
 });
