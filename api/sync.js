@@ -20,8 +20,15 @@ const MAX_BODY = 900 * 1024; // abaixo do limite de 1 MB por requisição do Ups
 const MIN_KEY = 24;
 const ALLOWED_FILES = ['taskflow.json', 'taskflow.deleted.json'];
 
-const REDIS_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+// A integração pode criar as variáveis com prefixo próprio (ex.: STORAGE_KV_REST_API_URL),
+// então aceitamos qualquer nome terminando em REST_API_URL/REDIS_REST_URL e o token equivalente.
+function findEnv(suffixes, exclude) {
+  const name = Object.keys(process.env).find(k =>
+    suffixes.some(s => k.endsWith(s)) && !(exclude && k.includes(exclude)) && process.env[k]);
+  return name ? process.env[name] : undefined;
+}
+const REDIS_URL = findEnv(['REST_API_URL', 'REDIS_REST_URL']);
+const REDIS_TOKEN = findEnv(['REST_API_TOKEN', 'REDIS_REST_TOKEN'], 'READ_ONLY');
 
 async function redis(command) {
   const r = await fetch(REDIS_URL, {
@@ -45,7 +52,8 @@ function readBody(req) {
 
 module.exports = async function handler(req, res) {
   if (!REDIS_URL || !REDIS_TOKEN) {
-    return send(res, 503, { error: 'Armazenamento não configurado: conecte um banco Upstash Redis ao projeto na Vercel.' });
+    const faltando = [!REDIS_URL && 'URL', !REDIS_TOKEN && 'TOKEN'].filter(Boolean).join(' e ');
+    return send(res, 503, { error: `Armazenamento não configurado (falta ${faltando} do Redis). Conecte o Upstash Redis ao projeto, marque o ambiente em uso (Production) e faça um novo deploy.` });
   }
   const key = String(req.headers['x-sync-key'] || '');
   if (key.length < MIN_KEY || key.length > 256) return send(res, 401, { error: 'Chave de sincronização inválida.' });
