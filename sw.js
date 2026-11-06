@@ -13,7 +13,7 @@
  * Ao trocar a versão de alguma biblioteca do CDN, atualize CDN_ASSETS e
  * incremente VERSION.
  */
-const VERSION = 'taskflow-v2';
+const VERSION = 'taskflow-v3';
 const APP_CACHE = `${VERSION}-app`;
 const CDN_CACHE = `${VERSION}-cdn`;
 
@@ -21,6 +21,8 @@ const APP_SHELL = [
   './',
   './index.html',
   './app.js',
+  './editor.js',
+  './styles.css',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
