@@ -532,6 +532,9 @@ body {
 .recur-check input { width: auto; accent-color: var(--accent); cursor: pointer; }
 .recur-fields { display: inline-flex; align-items: center; gap: 8px; }
 .recur-fields[hidden] { display: none; }
+/* chip de autosave: ao lado do checkbox; abaixo quando os campos de recorrência aparecem */
+.recur-row .autosave-chip { max-width: none; }
+.recur-fields:not([hidden]) ~ .autosave-chip { flex-basis: 100%; }
 .recur-fields .recur-sep { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
 .form-group .recur-fields input[type="number"] { width: 76px; padding: 8px 10px; }
 .form-group .recur-fields select { width: auto; min-width: 118px; padding: 8px 10px; }
@@ -683,7 +686,9 @@ body {
 /* Modal de tarefa compacto: status e prioridade na mesma linha */
 #taskModal .modal { max-width: 620px; }
 #taskModal .modal-body { padding: 16px 20px; }
-#taskModal .modal-header { padding: 14px 20px; }
+#taskModal .modal-header { padding: 8px 16px 8px 20px; }
+#taskModal .modal-header h2 { font-size: 15px; }
+#taskModal .modal-close { width: 28px; height: 28px; font-size: 16px; }
 #taskModal .form-group { margin-bottom: 12px; }
 #taskModal .md-editor-area textarea { min-height: 96px; }
 .pair-row { gap: 12px; }

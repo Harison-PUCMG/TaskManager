@@ -403,7 +403,7 @@
               <span class="dot" style="background:var(--todo)"></span>A fazer
             </button>
             <button type="button" class="status-btn" data-status="In Progress" onclick="setTaskStatus('In Progress')" aria-pressed="false">
-              <span class="dot" style="background:var(--inprogress)"></span>Em andamento
+              <span class="dot" style="background:var(--inprogress)"></span>Andamento
             </button>
             <button type="button" class="status-btn" data-status="Completed" onclick="setTaskStatus('Completed')" aria-pressed="false">
               <span class="dot" style="background:var(--completed)"></span>Concluída
@@ -460,22 +460,20 @@
                 <option value="year">ano(s)</option>
               </select>
             </div>
+            <div class="autosave-chip" id="autosaveChip" role="status" aria-live="polite">
+              <span class="chip-dot" aria-hidden="true"></span>
+              <span id="autosaveChipText">A tarefa é salva sozinha assim que tiver um título.</span>
+            </div>
           </div>
           <div class="field-hint" id="recurHint"></div>
         </div>
       </div>
       <div class="modal-footer modal-footer-split">
-        <div class="autosave-chip" id="autosaveChip" role="status" aria-live="polite">
-          <span class="chip-dot" aria-hidden="true"></span>
-          <span id="autosaveChipText">A tarefa é salva sozinha assim que tiver um título.</span>
-        </div>
         <div class="footer-actions">
           <button class="btn" id="revertBtn" onclick="revertDraft()" style="display:none"
                   title="Desfazer as alterações feitas nesta edição">Reverter alterações</button>
           <button class="btn btn-danger" id="discardBtn" onclick="discardDraft()" style="display:none"
                   title="Excluir a tarefa que acabou de ser criada">Descartar</button>
-          <button class="btn btn-primary" id="doneBtn" onclick="closeModal()"
-                  title="Fechar (Esc ou Ctrl+Enter)">Concluído</button>
         </div>
       </div>
     </div>
