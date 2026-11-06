@@ -1300,6 +1300,7 @@ function switchView(view, btn) {
     document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active')); btn.classList.add('active');
     document.getElementById('tableView').style.display = view === 'table' ? 'block' : 'none';
     document.getElementById('ganttView').style.display = view === 'gantt' ? 'block' : 'none';
+    document.getElementById('ganttNav').style.display = view === 'gantt' ? 'flex' : 'none';
     if (view === 'gantt') renderGantt();
 }
 
