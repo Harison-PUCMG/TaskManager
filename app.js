@@ -218,7 +218,7 @@ async function saveLocalState(source = 'sync') {
 
 // ─── TASK CHANGE LOG (audit journal so data lost to a bad reconciliation is recoverable) ───
 function taskSnapshot(t) {
-    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, priority: normalizePriority(t.priority), order: orderValue(t.order), pinned: !!t.pinned, recurrence: normalizeRecurrence(t.recurrence), hiddenUntil: t.hiddenUntil || null, lastCompletedAt: t.lastCompletedAt || null, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
+    return { id: t.id, title: t.title, description: t.description, status: t.status, startDate: t.startDate, endDate: t.endDate, priority: normalizePriority(t.priority), order: orderValue(t.order), pinned: !!t.pinned, parentId: t.parentId || null, recurrence: normalizeRecurrence(t.recurrence), hiddenUntil: t.hiddenUntil || null, lastCompletedAt: t.lastCompletedAt || null, createdAt: t.createdAt, modifiedAt: t.modifiedAt };
 }
 function serializeForLog(t) { return JSON.stringify(taskSnapshot(t)); }
 function initLogBaseline() {
@@ -769,7 +769,7 @@ function moveTaskTo(draggedId, targetId, after) {
     if (!draggedId || !targetId || draggedId === targetId) return false;
     const dragged = tasks.find(t => t.id === draggedId);
     if (!dragged) return false;
-    const rest = orderedTasks().filter(t => t.id !== draggedId);
+    const rest = orderedTasks().filter(t => t.id !== draggedId && !isSubtask(t));
     const idx = rest.findIndex(t => t.id === targetId);
     if (idx === -1) return false;
     const pos = after ? idx + 1 : idx;
@@ -796,7 +796,7 @@ function moveTaskTo(draggedId, targetId, after) {
 
 /** Um passo para cima (-1) ou para baixo (+1) na lista visível — atalho de teclado. */
 function moveTaskRelative(id, dir) {
-    const list = getFilteredTasks();
+    const list = getDisplayRows().filter(r => r.depth === 0).map(r => r.task);
     const i = list.findIndex(t => t.id === id);
     if (i === -1) return false;
     const j = i + dir;
@@ -832,6 +832,84 @@ function unpinTask(id) {
 }
 
 // ─── RENDER ───
+// ─── SUB-TAREFAS ───
+// Uma sub-tarefa é uma tarefa comum com `parentId` apontando para a tarefa-pai
+// (um único nível). Por serem tarefas, herdam sync, log, exclusão e desfazer.
+// Concluir todas as sub-tarefas conclui a pai; reabrir uma delas reabre a pai.
+const COLLAPSED_KEY = 'taskflow_collapsed_parents';
+let collapsedParents = new Set();
+try { collapsedParents = new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')); } catch (e) { }
+
+function parentOf(t) { return t && t.parentId ? (tasks.find(x => x.id === t.parentId && !x.parentId) || null) : null; }
+function isSubtask(t) { return !!parentOf(t); }       // órfã (pai sumiu) volta a ser tarefa comum
+function childrenOf(id) { return tasks.filter(t => t.parentId === id); }
+
+function toggleCollapse(id) {
+    if (collapsedParents.has(id)) collapsedParents.delete(id); else collapsedParents.add(id);
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedParents])); } catch (e) { }
+    render();
+}
+
+/** Mantém a pai coerente com as filhas. Retorna true se mudou algo. */
+function refreshParentStatus(parentId) {
+    const parent = tasks.find(t => t.id === parentId);
+    if (!parent) return false;
+    const kids = childrenOf(parentId);
+    if (!kids.length) return false;
+    const allDone = kids.every(k => k.status === 'Completed');
+    if (allDone && parent.status !== 'Completed') {
+        const jump = applyStatusChange(parent, 'Completed');
+        if (jump) {
+            // Recorrente: a pai pulou para a próxima ocorrência; as filhas recomeçam.
+            kids.forEach(k => { k.status = 'To Do'; k.modifiedAt = nowISOGMT3(); });
+            announceRollover(parent, jump);
+        } else {
+            showActionToast(`“${truncate(parent.title, 32)}” concluída: todas as sub-tarefas foram concluídas.`, null, null, 4000);
+        }
+        return true;
+    }
+    if (!allDone && parent.status === 'Completed') {
+        parent.status = 'To Do';   // autoUpdateStatuses reclassifica (andamento/atrasada)
+        parent.modifiedAt = nowISOGMT3();
+        return true;
+    }
+    return false;
+}
+
+/** Concluir a pai conclui todas as filhas. */
+function completeChildren(parentId) {
+    childrenOf(parentId).forEach(k => {
+        if (k.status !== 'Completed') { k.status = 'Completed'; k.modifiedAt = nowISOGMT3(); }
+    });
+}
+
+function subtaskProgress(parentId) {
+    const kids = childrenOf(parentId);
+    return { done: kids.filter(k => k.status === 'Completed').length, total: kids.length };
+}
+
+/**
+ * Linhas na ordem de exibição: cada tarefa-pai seguida de suas sub-tarefas.
+ * Pai aparece se ela ou alguma filha passa pelos filtros; filhas só se passam por eles.
+ */
+function getDisplayRows() {
+    const universe = orderedTasks();
+    const q = (searchQuery || '').toLowerCase();
+    const matches = t => (activeFilters.size === 0 || activeFilters.has(t.status))
+        && (!q || t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q));
+    const rows = [];
+    for (const t of universe) {
+        if (isSubtask(t)) continue;
+        const kids = universe.filter(k => k.parentId === t.id);
+        const kidsMatch = kids.filter(matches);
+        if (!matches(t) && !kidsMatch.length) continue;
+        const collapsed = collapsedParents.has(t.id);
+        rows.push({ task: t, depth: 0, kids: kids.length, collapsed });
+        if (!collapsed) kidsMatch.forEach(k => rows.push({ task: k, depth: 1 }));
+    }
+    return rows;
+}
+
 function render() {
     autoUpdateStatuses();
     if (releaseDueRecurrences()) saveToStorage();
@@ -955,7 +1033,7 @@ function recurBadgeHTML(t) {
 }
 
 function renderTable() {
-    const filtered = getFilteredTasks();
+    const filtered = getDisplayRows();
     const tbody = document.getElementById('taskTableBody');
     const empty = document.getElementById('emptyState');
     if (filtered.length === 0) {
@@ -965,10 +1043,10 @@ function renderTable() {
         return;
     }
     empty.style.display = 'none';
-    tbody.innerHTML = filtered.map(t => `
-    <tr data-reorder-id="${t.id}" class="${isHiddenRecurrence(t) ? 'recur-hidden' : ''}">
-      <td class="drag-cell"><div class="reorder-tools">${DRAG_HANDLE_HTML}${priorityBtnHTML(t)}</div></td>
-      <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${pinMarkHTML(t)}${recurBadgeHTML(t)}${esc(t.title)}</td>
+    tbody.innerHTML = filtered.map(row => { const t = row.task; const sub = row.depth > 0; return `
+    <tr ${sub ? '' : `data-reorder-id="${t.id}"`} class="${isHiddenRecurrence(t) ? 'recur-hidden' : ''}${sub ? ' subtask-row' : ''}${row.kids ? ' has-subtasks' : ''}">
+      <td class="drag-cell">${sub ? '' : `<div class="reorder-tools">${DRAG_HANDLE_HTML}${priorityBtnHTML(t)}</div>`}</td>
+      <td class="task-title-cell" onclick="editTask('${t.id}')" title="Clique para abrir a tarefa">${sub ? '<span class="subtask-branch" aria-hidden="true"></span><span class="subtask-tag">Sub</span>' : subtaskToggleHTML(t, row)}${sub ? '' : pinMarkHTML(t)}${sub ? '' : recurBadgeHTML(t)}${esc(t.title)}${!sub && row.kids ? subtaskCountHTML(t) : ''}</td>
       <td class="task-desc-cell" onclick="window.openMdViewer && openMdViewer('${esc(t.title).replace(/'/g,"\\'")}', ${JSON.stringify(t.description || '')})" title="${t.description ? 'Clique para ver a descrição completa' : ''}">${esc(window.mdToPlain ? window.mdToPlain(t.description) : t.description) || '—'}</td>
       <td><span class="status-badge ${statusClass(t.status)}" role="button" tabindex="0" title="Clique para alterar o status"
             onclick="toggleStatusDropdown(event, '${t.id}')"
@@ -976,10 +1054,22 @@ function renderTable() {
       <td class="date-cell">${formatDate(t.startDate)}</td>
       <td class="date-cell">${formatDate(t.endDate)}</td>
       <td><div class="action-btns">
+        ${sub ? '' : `<button class="icon-btn" onclick="openModal(null, '${t.id}')" title="Adicionar sub-tarefa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 4v8a3 3 0 003 3h8"/><line x1="16" y1="10" x2="16" y2="20"/><line x1="11" y1="15" x2="21" y2="15"/></svg></button>`}
         <button class="icon-btn" onclick="editTask('${t.id}')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
         <button class="icon-btn delete" onclick="deleteTask('${t.id}')" title="Excluir"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
       </div></td>
-    </tr>`).join('');
+    </tr>`; }).join('');
+}
+
+function subtaskToggleHTML(t, row) {
+    if (!row.kids) return '';
+    return `<button type="button" class="collapse-btn${row.collapsed ? ' collapsed' : ''}" aria-expanded="${!row.collapsed}"
+      title="${row.collapsed ? 'Mostrar sub-tarefas' : 'Ocultar sub-tarefas'}" aria-label="${row.collapsed ? 'Mostrar sub-tarefas' : 'Ocultar sub-tarefas'}"
+      onclick="event.stopPropagation(); toggleCollapse('${t.id}')"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>`;
+}
+function subtaskCountHTML(t) {
+    const p = subtaskProgress(t.id);
+    return `<span class="subtask-count" title="${p.done} de ${p.total} sub-tarefas concluídas">${p.done}/${p.total}</span>`;
 }
 
 // ─── GANTT ───
@@ -994,7 +1084,7 @@ function ganttToday() { ganttStartDate = getGanttDefaultStart(); renderGantt(); 
 
 function renderGantt() {
     if (!ganttStartDate) ganttStartDate = getGanttDefaultStart();
-    const filtered = getFilteredTasks();
+    const filtered = getDisplayRows();
     const container = document.getElementById('ganttContent');
     const today = todayGMT3();
     const days = [];
@@ -1013,7 +1103,8 @@ function renderGantt() {
     if (filtered.length === 0) {
         rowsHTML = `<div class="empty-state" style="padding:40px">${emptyStateHTML()}</div>`;
     } else {
-        filtered.forEach(t => {
+        filtered.forEach(row => {
+            const t = row.task; const sub = row.depth > 0;
             const sk = statusKey(t.status);
             const tStart = dateFromStrGMT3(t.startDate);
             const tEnd = dateFromStrGMT3(t.endDate);
@@ -1024,7 +1115,7 @@ function renderGantt() {
             const barLeft = startOffset * dayWidth, barWidth = duration * dayWidth;
             const barVisible = (startOffset + duration > 0) && (startOffset < GANTT_DAYS);
 
-            rowsHTML += `<div class="gantt-row" data-reorder-id="${t.id}"><div class="gantt-row-label">${DRAG_HANDLE_HTML}${priorityBtnHTML(t)}<span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${sk});flex-shrink:0"></span><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${recurBadgeHTML(t)}${esc(t.title)}</span></div><div class="gantt-row-timeline">`;
+            rowsHTML += `<div class="gantt-row${sub ? ' subtask-row' : ''}" ${sub ? '' : `data-reorder-id="${t.id}"`}><div class="gantt-row-label">${sub ? '<span class="subtask-branch" aria-hidden="true"></span>' : DRAG_HANDLE_HTML + priorityBtnHTML(t) + subtaskToggleHTML(t, row)}<button type="button" class="dot gantt-dot" style="background:var(--${sk})" title="Status: ${statusLabel(t.status)} — clique para alterar" aria-label="Status: ${statusLabel(t.status)} — clique para alterar" aria-haspopup="menu" onclick="toggleStatusDropdown(event, '${t.id}')"></button><span class="task-name clickable" title="Clique para abrir a tarefa" onclick="editTask('${t.id}')">${sub ? '' : recurBadgeHTML(t)}${esc(t.title)}${!sub && row.kids ? subtaskCountHTML(t) : ''}</span>${sub ? '' : `<button type="button" class="icon-btn gantt-add-sub" onclick="openModal(null, '${t.id}')" title="Adicionar sub-tarefa" aria-label="Adicionar sub-tarefa"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>`}</div><div class="gantt-row-timeline">`;
             days.forEach(d => { rowsHTML += `<div class="gantt-cell ${d.getTime() === today.getTime() ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'weekend' : ''}"></div>`; });
 
             if (barVisible) {
@@ -1319,6 +1410,7 @@ const DRAFT_GIST_DELAY_MS = 6000; // enquanto se edita, o push ao Gist fica adia
 
 const draft = {
     open: false,        // modal de tarefa aberto
+    parentId: null,     // tarefa-pai (modal de sub-tarefa)
     taskId: null,       // id ao qual este rascunho está vinculado (null = ainda não gravado)
     createdHere: false, // a tarefa nasceu nesta sessão do modal (habilita "Descartar")
     committing: false,  // trava de reentrância: impede duas criações simultâneas
@@ -1339,13 +1431,16 @@ function resetDraftState() {
     draft.original = null;
 }
 
-function openModal(taskId) {
+function openModal(taskId, parentId) {
     const existing = taskId ? tasks.find(t => t.id === taskId) : null;
 
     resetDraftState();
     draft.open = true;
     draft.taskId = existing ? existing.id : null;
     draft.lastSavedAt = null;
+    const parent = existing ? parentOf(existing) : (parentId ? tasks.find(t => t.id === parentId && !t.parentId) : null);
+    draft.parentId = parent ? parent.id : null;
+    updateSubtaskChrome(parent);
 
     const modal = document.getElementById('taskModal');
     modal.classList.add('show');
@@ -1357,7 +1452,7 @@ function openModal(taskId) {
         // Com o autosave não há mais "Cancelar": guardamos o estado de entrada para
         // que o usuário possa reverter a edição inteira em um clique.
         draft.original = taskSnapshot(existing);
-        document.getElementById('modalTitle').textContent = 'Editar tarefa';
+        document.getElementById('modalTitle').textContent = parent ? 'Editar sub-tarefa' : 'Editar tarefa';
         document.getElementById('taskTitle').value = existing.title;
         document.getElementById('taskDesc').value = existing.description;
         if (window.setTaskStatus) window.setTaskStatus(existing.status, true);
@@ -1367,13 +1462,13 @@ function openModal(taskId) {
         if (window.setTaskPriorityInput) window.setTaskPriorityInput(normalizePriority(existing.priority), true);
         setAutosaveState('saved-idle');
     } else {
-        document.getElementById('modalTitle').textContent = 'Nova tarefa';
+        document.getElementById('modalTitle').textContent = parent ? 'Nova sub-tarefa' : 'Nova tarefa';
         document.getElementById('taskTitle').value = '';
         document.getElementById('taskDesc').value = '';
         if (window.setTaskStatus) window.setTaskStatus('To Do', true);
         const td = todayStrGMT3();
-        document.getElementById('taskStart').value = td;
-        document.getElementById('taskEnd').value = td;
+        document.getElementById('taskStart').value = parent ? parent.startDate : td;
+        document.getElementById('taskEnd').value = parent ? parent.endDate : td;
         if (window.setTaskRecurrence) window.setTaskRecurrence(null);
         if (window.setTaskPriorityInput) window.setTaskPriorityInput(DEFAULT_PRIORITY, true);
         setAutosaveState('awaiting-title');
@@ -1381,7 +1476,49 @@ function openModal(taskId) {
     updateRecurrenceHint();
     updateTitleHint();
     updateDraftChrome();
+    renderModalSubtasks();
     setTimeout(() => document.getElementById('taskTitle').focus(), 100);
+}
+
+// Seção "Sub-tarefas" do modal de uma tarefa-pai: lista + botão de adicionar.
+function renderModalSubtasks() {
+    const sec = document.getElementById('subtaskSection');
+    if (!sec) return;
+    const isSub = !!draft.parentId;
+    sec.hidden = isSub;   // sub-tarefa não tem sub-tarefas
+    if (isSub) return;
+    const list = document.getElementById('subtaskList');
+    const kids = draft.taskId ? orderedTasks(childrenOf(draft.taskId)) : [];
+    list.innerHTML = kids.map(k => `<li class="subtask-item${k.status === 'Completed' ? ' done' : ''}">
+      <button type="button" class="subtask-item-title" onclick="openSubtaskFromModal('${k.id}')" title="Abrir sub-tarefa">${esc(k.title)}</button>
+      <span class="status-badge ${statusClass(k.status)}"><span class="dot"></span>${statusLabel(k.status)}</span></li>`).join('');
+    const p = draft.taskId ? subtaskProgress(draft.taskId) : { done: 0, total: 0 };
+    document.getElementById('subtaskSummary').textContent = p.total ? `${p.done}/${p.total} concluídas` : '';
+}
+
+// Grava a tarefa aberta (cria se ainda não existe) e abre o modal de nova sub-tarefa.
+function addSubtaskFromModal() {
+    if (!draft.open || draft.parentId) return;
+    commitDraft();
+    if (!draft.taskId) { updateTitleHint(); document.getElementById('taskTitle').focus(); return; }
+    const pid = draft.taskId;
+    closeModal();
+    openModal(null, pid);
+}
+function openSubtaskFromModal(id) {
+    if (draft.open) { commitDraft(); closeModal(); }
+    openModal(id);
+}
+
+function updateSubtaskChrome(parent) {
+    const banner = document.getElementById('subtaskBanner');
+    const recur = document.getElementById('recurGroup');
+    if (banner) {
+        banner.hidden = !parent;
+        const nameEl = document.getElementById('subtaskParentName');
+        if (nameEl) nameEl.textContent = parent ? parent.title : '';
+    }
+    if (recur) recur.hidden = !!parent;   // sub-tarefa não recorre: quem recorre é a pai
 }
 
 function closeModal() {
@@ -1570,7 +1707,12 @@ function commitDraft() {
             if (form.status === 'Completed') {
                 jump = applyStatusChange(existing, 'Completed');
                 if (jump) jump.before = beforeCommit;
+                if (!existing.parentId) {
+                    if (jump) childrenOf(existing.id).forEach(k => { k.status = 'To Do'; k.modifiedAt = now; });
+                    else completeChildren(existing.id);
+                }
             }
+            if (existing.parentId) refreshParentStatus(existing.parentId);
         } else {
             const today = todayStrGMT3();
             let startDate = form.startDate || today;
@@ -1579,7 +1721,8 @@ function commitDraft() {
             const created = {
                 id: genId(), title: form.title, description: form.description, status: form.status,
                 startDate, endDate, priority: form.priority, order: null, pinned: false,
-                recurrence: normalizeRecurrence(form.recurrence), hiddenUntil: null, lastCompletedAt: null,
+                parentId: draft.parentId || null,
+                recurrence: draft.parentId ? null : normalizeRecurrence(form.recurrence), hiddenUntil: null, lastCompletedAt: null,
                 createdAt: now, modifiedAt: now
             };
             tasks.push(created);
@@ -1587,6 +1730,7 @@ function commitDraft() {
             draft.taskId = created.id;   // ← vínculo por id: daqui em diante é sempre update
             draft.createdHere = true;
             if (form.status === 'Completed') jump = applyStatusChange(created, 'Completed');
+            if (created.parentId) refreshParentStatus(created.parentId);
         }
 
         draft.wrote = true;
@@ -1607,6 +1751,7 @@ function commitDraft() {
         }
 
         updateDraftChrome();
+        renderModalSubtasks();
         updateRecurrenceHint();
         updateTitleHint();
         setAutosaveState((form.startDate && form.endDate) ? 'saved' : 'dates-kept');
@@ -1736,14 +1881,16 @@ function deleteTask(id) {
         resetDraftState();
         document.getElementById('taskModal').classList.remove('show');
     }
+    const kidSnaps = childrenOf(id).map(k => { if (draft.open && draft.taskId === k.id) { resetDraftState(); document.getElementById('taskModal').classList.remove('show'); } return removeTaskById(k.id); });
     const snap = removeTaskById(id);
     if (!snap) return;
     saveToStorage();
     render();
-    showActionToast(`Tarefa “${truncate(snap.title, 40)}” excluída.`, 'Desfazer', () => restoreTask(snap));
+    const n = kidSnaps.length;
+    showActionToast(`Tarefa “${truncate(snap.title, 40)}” excluída${n ? ` com ${n} sub-tarefa${n > 1 ? 's' : ''}` : ''}.`, 'Desfazer', () => { restoreTask(snap); kidSnaps.forEach(k => restoreTask(k, true)); });
 }
 
-function restoreTask(snap) {
+function restoreTask(snap, quiet) {
     if (!snap || !snap.id || tasks.some(t => t.id === snap.id)) return;
     const key = (snap.title || '').toLowerCase();
     // Limpa os tombstones da tarefa para que a restauração sobreviva ao próximo sync.
@@ -1751,7 +1898,7 @@ function restoreTask(snap) {
     tasks.push({ ...snap, modifiedAt: nowISOGMT3() });
     saveToStorage(1200);
     render();
-    showActionToast('Tarefa restaurada.', null, null, 2500);
+    if (!quiet) showActionToast('Tarefa restaurada.', null, null, 2500);
 }
 
 // ─── TOAST COM AÇÃO ───
@@ -1824,12 +1971,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else initTaskDraftUI();
 
 // ─── STATUS DROPDOWN (na tabela) ───
-function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.target.closest('.status-badge').getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
+function toggleStatusDropdown(e, id) { e.stopPropagation(); statusChangeId = id; const dd = document.getElementById('statusDropdown'); const rect = e.currentTarget.getBoundingClientRect(); dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px'; dd.classList.toggle('show'); }
 function changeStatus(ns) {
     if (statusChangeId) {
         const t = tasks.find(tk => tk.id === statusChangeId);
         if (t) {
+            const wasSub = isSubtask(t);
+            const kids = childrenOf(t.id);
             const jump = applyStatusChange(t, ns);
+            if (ns === 'Completed' && kids.length) {
+                if (jump) kids.forEach(k => { k.status = 'To Do'; k.modifiedAt = nowISOGMT3(); });
+                else completeChildren(t.id);
+            }
+            if (wasSub) refreshParentStatus(t.parentId);
             saveToStorage(); render();
             announceRollover(t, jump);
         }
@@ -1893,6 +2047,7 @@ function normalizeTasks(arr) {
             startDate: t.startDate || todayStrGMT3(), endDate: t.endDate || todayStrGMT3(),
             priority: normalizePriority(t.priority), priorityUnknown,
             order: pinned ? orderValue(t.order) : null, pinned, pinnedUnknown,
+            parentId: t.parentId || null,
             recurrence: normalizeRecurrence(t.recurrence),
             hiddenUntil: t.recurrence && t.hiddenUntil ? t.hiddenUntil : null,
             lastCompletedAt: t.lastCompletedAt || null,
@@ -1942,6 +2097,7 @@ function mergeTaskLists(incoming) {
             if (incMod > exMod) {
                 ex.status = inc.status; ex.startDate = inc.startDate; ex.endDate = inc.endDate;
                 ex.description = inc.description || ex.description;
+                ex.parentId = inc.parentId || null;
                 ex.recurrence = normalizeRecurrence(inc.recurrence);
                 ex.hiddenUntil = ex.recurrence ? (inc.hiddenUntil || null) : null;
                 ex.lastCompletedAt = inc.lastCompletedAt || ex.lastCompletedAt || null;

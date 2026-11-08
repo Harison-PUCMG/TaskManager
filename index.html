@@ -98,7 +98,7 @@
     </div>
     <div class="auth-card">
       <div class="auth-header">
-        <div class="logo"><div class="logo-icon">&#9638;</div> TaskFlow</div>
+        <div class="logo"><img class="logo-icon" src="icons/favicon.svg" alt=""> TaskFlow</div>
         <p>Gestão inteligente de tarefas</p>
       </div>
       <div class="auth-tabs">
@@ -125,7 +125,7 @@
   <div id="appContainer" style="display:none">
 
     <header class="app-header">
-      <div class="logo"><div class="logo-icon">&#9638;</div> TaskFlow</div>
+      <div class="logo"><img class="logo-icon" src="icons/favicon.svg" alt=""> TaskFlow</div>
       <div class="header-actions">
         <input type="file" id="csvInput" accept=".json" onchange="importFileJSON(event)">
         <div class="user-menu-wrapper">
@@ -336,6 +336,7 @@
         <button class="modal-close" onclick="closeModal()" title="Fechar (Esc)" aria-label="Fechar">&#x2715;</button>
       </div>
       <div class="modal-body">
+        <div class="subtask-banner" id="subtaskBanner" hidden>Sub-tarefa de <strong id="subtaskParentName"></strong></div>
         <div class="form-group">
           <label for="taskTitle">Título <span style="color:var(--overdue)" aria-hidden="true">*</span></label>
           <input type="text" id="taskTitle" placeholder="Nome da tarefa" autocomplete="off"
@@ -427,8 +428,18 @@
         </div>
         <div class="date-swap-notice" id="dateSwapNotice">⇄ Datas invertidas automaticamente (início era posterior ao término).</div>
 
+        <!-- SUB-TAREFAS -->
+        <div class="form-group subtask-section" id="subtaskSection">
+          <div class="subtask-section-head">
+            <label>Sub-tarefas <span id="subtaskSummary" class="subtask-summary"></span></label>
+            <button type="button" class="btn" onclick="addSubtaskFromModal()">+ Adicionar sub-tarefa</button>
+          </div>
+          <ul class="subtask-list" id="subtaskList"></ul>
+          <div class="field-hint info show">Concluir todas as sub-tarefas conclui esta tarefa automaticamente.</div>
+        </div>
+
         <!-- RECORRÊNCIA -->
-        <div class="form-group" style="margin-bottom:0">
+        <div class="form-group" style="margin-bottom:0" id="recurGroup">
           <label id="recurGroupLabel">Recorrência</label>
           <div class="recur-row" role="group" aria-labelledby="recurGroupLabel">
             <label class="recur-check">

@@ -13,7 +13,7 @@
  * Ao trocar a versão de alguma biblioteca do CDN, atualize CDN_ASSETS e
  * incremente VERSION.
  */
-const VERSION = 'taskflow-v4';
+const VERSION = 'taskflow-v5';
 const APP_CACHE = `${VERSION}-app`;
 const CDN_CACHE = `${VERSION}-cdn`;
 
@@ -27,7 +27,8 @@ const APP_SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
-  './icons/apple-touch-icon.png'
+  './icons/apple-touch-icon.png',
+  './icons/favicon.svg'
 ];
 
 const CDN_ASSETS = [
