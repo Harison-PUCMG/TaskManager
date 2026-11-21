@@ -160,6 +160,16 @@
               </div>
             </details>
 
+            <details class="user-section">
+              <summary>&#8645; Ordenação</summary>
+              <div class="user-section-body" role="radiogroup" aria-label="Método de ordenação">
+                <button class="user-dropdown-item sort-opt" role="radio" data-sort-mode="level" onclick="setSortMode('level')" title="Alta, normal e baixa; dentro de cada nível, pela data de término">Prioridade (alta, normal, baixa)</button>
+                <button class="user-dropdown-item sort-opt" role="radio" data-sort-mode="drag" onclick="setSortMode('drag')" title="A posição definida ao arrastar as tarefas">Prioridade entre tarefas (arrastar)</button>
+                <button class="user-dropdown-item sort-opt" role="radio" data-sort-mode="date" onclick="setSortMode('date')" title="Somente pela data de término">Data de término</button>
+                <button class="user-dropdown-item sort-opt" role="radio" data-sort-mode="name" onclick="setSortMode('name')" title="Ordem alfabética pelo nome da tarefa">Nome (A–Z)</button>
+              </div>
+            </details>
+
             <details class="user-section" open>
               <summary>&#128269; Filtros por status</summary>
               <div class="user-section-body filter-list">

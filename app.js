@@ -728,10 +728,43 @@ function compareByDate(a, b) {
     return 0;
 }
 
+// ─── MÉTODO DE ORDENAÇÃO (menu do perfil) ───
+//   level: nível de prioridade (alta, normal, baixa) e, dentro dele, a data de término.
+//   drag:  posição entre tarefas definida ao arrastar (âncoras na régua das datas), ignorando o nível.
+//   date:  somente data de término.
+//   name:  ordem alfabética pelo nome da tarefa.
+const SORT_KEY = 'taskflow_sort_mode';
+const SORT_MODES = ['level', 'drag', 'date', 'name'];
+const DEFAULT_SORT = 'level';
+let sortMode = DEFAULT_SORT;
+try { const m = localStorage.getItem(SORT_KEY); if (SORT_MODES.includes(m)) sortMode = m; } catch (e) { }
+document.documentElement.setAttribute('data-sort', sortMode);
+
+function setSortMode(m) {
+    if (!SORT_MODES.includes(m)) return;
+    sortMode = m;
+    document.documentElement.setAttribute('data-sort', m);
+    try { localStorage.setItem(SORT_KEY, m); } catch (e) { }
+    updateSortControls();
+    if (typeof render === 'function' && currentUser) render();
+}
+function updateSortControls() {
+    document.querySelectorAll('[data-sort-mode]').forEach(b =>
+        b.setAttribute('aria-checked', b.dataset.sortMode === sortMode ? 'true' : 'false'));
+}
+document.addEventListener('DOMContentLoaded', updateSortControls);
+
 function compareTasks(a, b) {
-    const pa = priorityRank(a), pb = priorityRank(b);
-    if (pa !== pb) return pa - pb;
-    const ka = sortKey(a), kb = sortKey(b);
+    if (sortMode === 'name') {
+        const n = String(a.title || '').localeCompare(String(b.title || ''), 'pt-BR', { sensitivity: 'base', numeric: true });
+        if (n !== 0) return n;
+    }
+    if (sortMode === 'level') {
+        const pa = priorityRank(a), pb = priorityRank(b);
+        if (pa !== pb) return pa - pb;
+    }
+    const ka = sortMode === 'drag' ? sortKey(a) : dateKey(a);
+    const kb = sortMode === 'drag' ? sortKey(b) : dateKey(b);
     if (ka !== kb) return ka - kb;
     const d = compareByDate(a, b);
     if (d !== 0) return d;
@@ -777,10 +810,10 @@ function moveTaskTo(draggedId, targetId, after) {
     // altas faz da arrastada uma alta. Só as vizinhas do MESMO nível entram na
     // conta da posição — as de outro nível estão separadas pelo critério 0.
     const priority = normalizePriority(rest[idx].priority);
-    const same = t => t && normalizePriority(t.priority) === priority;
+    const same = t => t && (sortMode === 'drag' || normalizePriority(t.priority) === priority);
     const prev = same(rest[pos - 1]) ? rest[pos - 1] : null;
     const next = same(rest[pos]) ? rest[pos] : null;
-    assignPriority(dragged, priority);
+    if (sortMode !== 'drag') assignPriority(dragged, priority);
     // Ponto médio entre os vizinhos na régua das datas. Um dia inteiro de folga nas
     // pontas evita que a próxima tarefa a entrar cole na âncora por acidente.
     const kp = prev ? sortKey(prev) : null, kn = next ? sortKey(next) : null;
@@ -796,6 +829,7 @@ function moveTaskTo(draggedId, targetId, after) {
 
 /** Um passo para cima (-1) ou para baixo (+1) na lista visível — atalho de teclado. */
 function moveTaskRelative(id, dir) {
+    if (sortMode !== 'drag') return false;
     const list = getDisplayRows().filter(r => r.depth === 0).map(r => r.task);
     const i = list.findIndex(t => t.id === id);
     if (i === -1) return false;
@@ -814,7 +848,7 @@ function setTaskPriority(id, priority) {
     const p = normalizePriority(priority);
     if (!t || normalizePriority(t.priority) === p) return false;
     assignPriority(t, p);
-    clearPin(t);
+    if (sortMode !== 'drag') clearPin(t);
     t.modifiedAt = nowISOGMT3();
     saveToStorage();
     render();
@@ -1698,7 +1732,7 @@ function commitDraft() {
             existing.startDate = startDate;
             existing.endDate = endDate;
             // Mesma regra do atalho da lista: trocar de nível solta a âncora manual.
-            if (normalizePriority(existing.priority) !== form.priority) { assignPriority(existing, form.priority); clearPin(existing); }
+            if (normalizePriority(existing.priority) !== form.priority) { assignPriority(existing, form.priority); if (sortMode !== 'drag') clearPin(existing); }
             setRecurrence(existing, form.recurrence);
             shiftPinForDateChange(existing, beforeCommit.startDate, beforeCommit.endDate);
             reconcileStatusAfterDateChange(existing, prevStatus);
