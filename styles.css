@@ -391,9 +391,9 @@ body {
 }
 .gantt-day .day-name { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
 .gantt-day .day-num { font-size: 12px; font-weight: 600; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
-.gantt-day.today { background: rgba(99, 102, 241, 0.08); }
 .gantt-day.today .day-num { color: var(--accent); }
 .gantt-day.weekend { background: var(--weekend-tint); }
+.gantt-day.today { background: color-mix(in srgb, var(--accent) 20%, transparent); box-shadow: inset 0 2px 0 var(--accent); }
 
 .gantt-row { display: flex; border-bottom: 1px solid var(--border); transition: background 0.1s; min-height: 48px; }
 .gantt-row:hover { background: var(--surface); }
@@ -408,8 +408,8 @@ body {
 .gantt-row-label .task-name.clickable:hover { color: var(--accent-hover); text-decoration: underline; }
 .gantt-row-timeline { flex: 1; position: relative; display: flex; }
 .gantt-cell { flex: 1; min-width: 40px; border-right: 1px solid var(--border); position: relative; }
-.gantt-cell.today { background: rgba(99, 102, 241, 0.05); }
 .gantt-cell.weekend { background: var(--weekend-tint); }
+.gantt-cell.today { background: color-mix(in srgb, var(--accent) 11%, transparent); }
 
 .gantt-bar {
   position: absolute; top: 50%; transform: translateY(-50%);
@@ -449,9 +449,6 @@ body {
   box-shadow: var(--shadow); white-space: nowrap;
 }
 .drag-date-indicator.show { display: block; }
-
-.gantt-today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 8; pointer-events: none; }
-.gantt-today-line::before { content: ''; position: absolute; top: -4px; left: -4px; width: 10px; height: 10px; background: var(--accent); border-radius: 50%; }
 
 .gantt-nav { display: flex; align-items: center; gap: 8px; padding: 4px 0 4px 16px; }
 .gantt-nav .btn { padding: 5px 10px; }

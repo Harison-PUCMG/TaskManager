@@ -1161,8 +1161,6 @@ function renderGantt() {
             <div class="gantt-handle gantt-handle-right" data-handle="right" data-task-id="${t.id}"></div></div>`;
                 }
             }
-            const todayOffset = (today.getTime() - ganttStart) / (1000 * 60 * 60 * 24);
-            if (todayOffset >= 0 && todayOffset < GANTT_DAYS) rowsHTML += `<div class="gantt-today-line" style="left:${todayOffset * dayWidth}%"></div>`;
             rowsHTML += `</div></div>`;
         });
     }
